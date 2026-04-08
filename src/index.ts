@@ -14,9 +14,17 @@ export interface SkillDefinition {
   execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
 }
 
+export interface UserIdentity {
+  userId: string;
+  name?: string;
+  avatar?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface InitOptions {
   channelKey: string;
   skills?: SkillDefinition[];
+  user?: UserIdentity;
   apiBase?: string;
   protocolVersion?: string;
   maxRetries?: number;        // default 3
@@ -27,7 +35,8 @@ export interface InitOptions {
 export interface RunOptions {
   userInput: string;
   context?: Record<string, unknown>;
-  sessionId?: string;
+  threadId?: string;
+  runId?: string;
   toolResult?: Record<string, unknown>;
 }
 
@@ -66,7 +75,9 @@ export class WebAASDK {
   private _channelId: string | null = null;
   private _channelKey: string = '';
   private _accessToken: string | null = null;
-  private _sessionId: string | null = null;
+  private _runId: string | null = null;
+  private _threadId: string | null = null;
+  private _userId: string | null = null;
   private _skills: Map<string, SkillDefinition> = new Map();
   private _apiBase: string = '';
   private _protocolVersion: string = DEFAULT_PROTOCOL_VERSION;
@@ -175,6 +186,11 @@ export class WebAASDK {
       const data = await response.json();
       this._channelId = data.channel_id;
     }
+
+    // 4. Identify user if provided
+    if (options.user) {
+      await this.identify(options.user);
+    }
   }
 
   /**
@@ -184,9 +200,14 @@ export class WebAASDK {
     const emitter = new EventEmitter();
     this._disconnected = false;
 
-    // Preserve session_id if provided (e.g. cross-page resume)
-    if (options.sessionId) {
-      this._sessionId = options.sessionId;
+    // Preserve run_id if provided (e.g. cross-page resume)
+    if (options.runId) {
+      this._runId = options.runId;
+    }
+
+    // Preserve thread_id if provided
+    if (options.threadId) {
+      this._threadId = options.threadId;
     }
 
     this._startSSEStream(options, emitter, 0, false);
@@ -202,8 +223,14 @@ export class WebAASDK {
         user_input: options.userInput,
         context: options.context ?? {},
       };
-      if (options.sessionId !== undefined) body.session_id = options.sessionId;
+      if (options.runId !== undefined) body.run_id = options.runId;
       if (options.toolResult !== undefined) body.tool_result = options.toolResult;
+      if (this._userId) body.user_id = this._userId;
+      if (options.threadId !== undefined) {
+        body.thread_id = options.threadId;
+      } else if (this._threadId) {
+        body.thread_id = this._threadId;
+      }
 
       const response = await fetch(`${this._apiBase}/api/agent/run`, {
         method: 'POST',
@@ -338,8 +365,11 @@ export class WebAASDK {
             let event: AGUIEvent;
             try { event = JSON.parse(jsonStr); } catch { continue; }
 
-            if (event.type === 'RunStarted' && event.payload?.session_id) {
-              this._sessionId = event.payload.session_id as string;
+            if (event.type === 'RunStarted' && event.payload?.run_id) {
+              this._runId = event.payload.run_id as string;
+              if (event.payload.thread_id) {
+                this._threadId = event.payload.thread_id as string;
+              }
             }
 
             if (!KNOWN_EVENT_TYPES.has(event.type)) continue;
@@ -401,7 +431,7 @@ export class WebAASDK {
               reader.releaseLock();
 
               await this._startSSEStream(
-                { userInput: '', sessionId: this._sessionId ?? undefined, toolResult },
+                { userInput: '', runId: this._runId ?? undefined, toolResult },
                 emitter, 0,
               );
               return;
@@ -421,6 +451,80 @@ export class WebAASDK {
       this._activeReader = null;
       reader.releaseLock();
     }
+  }
+
+  /**
+   * Identify the current end user. Can be called during init or later.
+   */
+  async identify(user: UserIdentity): Promise<void> {
+    this._userId = user.userId;
+    if (!this._accessToken) return;
+
+    const response = await fetch(`${this._apiBase}/api/sdk/identify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this._accessToken}`,
+      },
+      body: JSON.stringify({
+        user_id: user.userId,
+        name: user.name ?? null,
+        avatar: user.avatar ?? null,
+        metadata: user.metadata ?? {},
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Identify failed (${response.status}): ${body.detail ?? response.statusText}`);
+    }
+  }
+
+  /**
+   * Create a new thread for the current user.
+   */
+  async createThread(title?: string): Promise<{ id: string }> {
+    if (!this._userId) throw new Error('Call identify() before creating threads');
+    if (!this._accessToken) throw new Error('SDK not initialized');
+
+    const response = await fetch(`${this._apiBase}/api/sdk/threads`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this._accessToken}`,
+      },
+      body: JSON.stringify({ user_id: this._userId, title: title ?? null }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Create thread failed: ${body.detail ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    this._threadId = data.id;
+    return data;
+  }
+
+  /**
+   * List threads for the current user.
+   */
+  async listThreads(limit = 20, offset = 0): Promise<Array<Record<string, unknown>>> {
+    if (!this._userId) throw new Error('Call identify() before listing threads');
+    if (!this._accessToken) throw new Error('SDK not initialized');
+
+    const params = new URLSearchParams({
+      user_id: this._userId,
+      limit: String(limit),
+      offset: String(offset),
+    });
+
+    const response = await fetch(`${this._apiBase}/api/sdk/threads?${params}`, {
+      headers: { 'Authorization': `Bearer ${this._accessToken}` },
+    });
+
+    if (!response.ok) return [];
+    return response.json();
   }
 
   /**
@@ -450,7 +554,9 @@ export class WebAASDK {
 
   get version(): string { return SDK_VERSION; }
   get channelId(): string | null { return this._channelId; }
-  get sessionId(): string | null { return this._sessionId; }
+  get runId(): string | null { return this._runId; }
+  get threadId(): string | null { return this._threadId; }
+  get userId(): string | null { return this._userId; }
   get accessToken(): string | null { return this._accessToken; }
   get apiBase(): string { return this._apiBase; }
   get channelConfig(): ChannelConfig | null { return this._channelConfig; }

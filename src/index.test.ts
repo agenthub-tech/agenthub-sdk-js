@@ -316,7 +316,7 @@ describe('WebAASDK.run', () => {
 
   it('should POST to /api/agent/run with correct payload and headers', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('RunFinished', {}),
     ]);
 
@@ -339,9 +339,9 @@ describe('WebAASDK.run', () => {
     expect(body.context).toEqual({ page: 'home' });
   });
 
-  it('should include session_id and tool_result in payload when provided', async () => {
+  it('should include run_id and tool_result in payload when provided', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-2' }),
+      sseEvent('RunStarted', { run_id: 's-2' }),
       sseEvent('RunFinished', {}),
     ]);
 
@@ -350,13 +350,13 @@ describe('WebAASDK.run', () => {
 
     const emitter = sdk.run({
       userInput: '',
-      sessionId: 's-old',
+      runId: 's-old',
       toolResult: { result: 'ok' },
     });
     await collectEvents(emitter);
 
     const body = JSON.parse(sseFetch.mock.calls[0][1].body);
-    expect(body.session_id).toBe('s-old');
+    expect(body.run_id).toBe('s-old');
     expect(body.tool_result).toEqual({ result: 'ok' });
   });
 
@@ -373,7 +373,7 @@ describe('WebAASDK.run', () => {
 
   it('should emit typed events matching the event type', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('TextMessageStart', { message_id: 'm-1' }),
       sseEvent('TextMessageDelta', { delta: 'hi' }),
       sseEvent('TextMessageEnd', { message_id: 'm-1' }),
@@ -402,7 +402,7 @@ describe('WebAASDK.run', () => {
 
   it('should emit generic "event" for all events', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('TextMessageDelta', { delta: 'x' }),
       sseEvent('RunFinished', {}),
     ]);
@@ -415,23 +415,23 @@ describe('WebAASDK.run', () => {
     expect(events.map((e) => e.type)).toEqual(['RunStarted', 'TextMessageDelta', 'RunFinished']);
   });
 
-  it('should track session_id from RunStarted events', async () => {
+  it('should track run_id from RunStarted events', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 'tracked-session-42' }),
+      sseEvent('RunStarted', { run_id: 'tracked-session-42' }),
       sseEvent('RunFinished', {}),
     ]);
 
     const sdk = new WebAASDK();
     await initSDK(sdk, sseFetch);
 
-    expect(sdk.sessionId).toBeNull();
+    expect(sdk.runId).toBeNull();
     await collectEvents(sdk.run({ userInput: 'hi' }));
-    expect(sdk.sessionId).toBe('tracked-session-42');
+    expect(sdk.runId).toBe('tracked-session-42');
   });
 
   it('should emit "done" on RunFinished', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('RunFinished', { reason: 'complete' }),
     ]);
 
@@ -448,7 +448,7 @@ describe('WebAASDK.run', () => {
 
   it('should emit "error" on Error event from SSE', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('Error', { message: 'something broke' }),
     ]);
 
@@ -516,7 +516,7 @@ describe('WebAASDK.run', () => {
 
   it('should handle SSE data split across multiple chunks', async () => {
     // Simulate a single event split across two chunks
-    const fullEvent = sseEvent('RunStarted', { session_id: 's-split' });
+    const fullEvent = sseEvent('RunStarted', { run_id: 's-split' });
     const midpoint = Math.floor(fullEvent.length / 2);
     const chunk1 = fullEvent.slice(0, midpoint);
     const chunk2 = fullEvent.slice(midpoint) + sseEvent('RunFinished', {});
@@ -527,12 +527,12 @@ describe('WebAASDK.run', () => {
 
     const events = await collectEvents(sdk.run({ userInput: 'hi' }));
     expect(events.map((e) => e.type)).toEqual(['RunStarted', 'RunFinished']);
-    expect(sdk.sessionId).toBe('s-split');
+    expect(sdk.runId).toBe('s-split');
   });
 
   it('should skip malformed JSON lines gracefully', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       'data: {not valid json}\n\n',
       sseEvent('RunFinished', {}),
     ]);
@@ -556,7 +556,7 @@ describe('WebAASDK.run', () => {
     expect(body.context).toEqual({});
   });
 
-  it('should not include session_id/tool_result when not provided', async () => {
+  it('should not include run_id/tool_result when not provided', async () => {
     const sseFetch = mockFetchSSE([sseEvent('RunFinished', {})]);
     const sdk = new WebAASDK();
     await initSDK(sdk, sseFetch);
@@ -565,7 +565,7 @@ describe('WebAASDK.run', () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const body = JSON.parse(sseFetch.mock.calls[0][1].body);
-    expect(body).not.toHaveProperty('session_id');
+    expect(body).not.toHaveProperty('run_id');
     expect(body).not.toHaveProperty('tool_result');
   });
 
@@ -585,7 +585,7 @@ describe('WebAASDK.run', () => {
 
   it('should stop processing events after RunFinished', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('RunFinished', {}),
       sseEvent('TextMessageDelta', { delta: 'should not appear' }),
     ]);
@@ -637,7 +637,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
           ok: true,
           status: 200,
           body: createSSEStream([
-            sseEvent('RunStarted', { session_id: 'sess-1' }),
+            sseEvent('RunStarted', { run_id: 'sess-1' }),
             sseEvent('SkillExecuteInstruction', {
               tool_call_id: 'tc-1',
               skill_name: 'dom_skill',
@@ -650,7 +650,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
         ok: true,
         status: 200,
         body: createSSEStream([
-          sseEvent('RunStarted', { session_id: 'sess-1' }),
+          sseEvent('RunStarted', { run_id: 'sess-1' }),
           sseEvent('TextMessageDelta', { delta: 'Done!' }),
           sseEvent('RunFinished', {}),
         ]),
@@ -663,11 +663,11 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
     expect(executeFn).toHaveBeenCalledOnce();
     expect(executeFn).toHaveBeenCalledWith({ action: 'click', el_id: 'el_001' });
 
-    // Follow-up run was called with tool_result and session_id
+    // Follow-up run was called with tool_result and run_id
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondCallBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(secondCallBody.session_id).toBe('sess-1');
+    expect(secondCallBody.run_id).toBe('sess-1');
     expect(secondCallBody.tool_result).toEqual({
       tool_call_id: 'tc-1',
       result: { clicked: true },
@@ -693,7 +693,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
           ok: true,
           status: 200,
           body: createSSEStream([
-            sseEvent('RunStarted', { session_id: 'sess-2' }),
+            sseEvent('RunStarted', { run_id: 'sess-2' }),
             sseEvent('SkillExecuteInstruction', {
               tool_call_id: 'tc-2',
               skill_name: 'unknown_skill',
@@ -739,7 +739,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
           ok: true,
           status: 200,
           body: createSSEStream([
-            sseEvent('RunStarted', { session_id: 'sess-3' }),
+            sseEvent('RunStarted', { run_id: 'sess-3' }),
             sseEvent('SkillExecuteInstruction', {
               tool_call_id: 'tc-3',
               skill_name: 'dom_skill',
@@ -769,7 +769,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
     expect(events.map((e) => e.type)).toContain('RunFinished');
   });
 
-  it('should use tracked session_id in the follow-up run request', async () => {
+  it('should use tracked run_id in the follow-up run request', async () => {
     const skill = makeSkill({ name: 'page_skill', execute: async () => ({ scanned: true }) });
 
     const sdk = new WebAASDK();
@@ -783,7 +783,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
           ok: true,
           status: 200,
           body: createSSEStream([
-            sseEvent('RunStarted', { session_id: 'my-session-xyz' }),
+            sseEvent('RunStarted', { run_id: 'my-session-xyz' }),
             sseEvent('SkillExecuteInstruction', {
               tool_call_id: 'tc-4',
               skill_name: 'page_skill',
@@ -805,7 +805,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const secondCallBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(secondCallBody.session_id).toBe('my-session-xyz');
+    expect(secondCallBody.run_id).toBe('my-session-xyz');
   });
 
   it('should pipe follow-up run events to the same emitter (transparent dispatch)', async () => {
@@ -822,7 +822,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
           ok: true,
           status: 200,
           body: createSSEStream([
-            sseEvent('RunStarted', { session_id: 'sess-pipe' }),
+            sseEvent('RunStarted', { run_id: 'sess-pipe' }),
             sseEvent('SkillExecuteInstruction', {
               tool_call_id: 'tc-pipe',
               skill_name: 'test_skill',
@@ -835,7 +835,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
         ok: true,
         status: 200,
         body: createSSEStream([
-          sseEvent('RunStarted', { session_id: 'sess-pipe' }),
+          sseEvent('RunStarted', { run_id: 'sess-pipe' }),
           sseEvent('TextMessageStart', { message_id: 'm-1' }),
           sseEvent('TextMessageDelta', { delta: 'All done' }),
           sseEvent('TextMessageEnd', { message_id: 'm-1' }),
@@ -883,7 +883,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
           ok: true,
           status: 200,
           body: createSSEStream([
-            sseEvent('RunStarted', { session_id: 'sess-5' }),
+            sseEvent('RunStarted', { run_id: 'sess-5' }),
             sseEvent('SkillExecuteInstruction', {
               tool_call_id: 'tc-5',
               skill_name: 'simple_skill',
@@ -937,7 +937,7 @@ describe('WebAASDK connection lifecycle', () => {
         ok: true,
         status: 200,
         body: createSSEStream([
-          sseEvent('RunStarted', { session_id: 's-retry' }),
+          sseEvent('RunStarted', { run_id: 's-retry' }),
           sseEvent('RunFinished', {}),
         ]),
       });
@@ -1012,7 +1012,7 @@ describe('WebAASDK connection lifecycle', () => {
 
   it('should NOT reconnect on RunFinished event', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('RunFinished', {}),
     ]);
 
@@ -1026,7 +1026,7 @@ describe('WebAASDK connection lifecycle', () => {
 
   it('should emit error and close on Error event without reconnecting', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('Error', { message: 'something broke' }),
     ]);
 
@@ -1094,7 +1094,7 @@ describe('WebAASDK connection lifecycle', () => {
         ok: true,
         status: 200,
         body: createSSEStream([
-          sseEvent('RunStarted', { session_id: 's-net' }),
+          sseEvent('RunStarted', { run_id: 's-net' }),
           sseEvent('RunFinished', {}),
         ]),
       });
@@ -1172,7 +1172,7 @@ describe('WebAASDK connection lifecycle', () => {
 
   it('should silently ignore unknown event types', async () => {
     const sseFetch = mockFetchSSE([
-      sseEvent('RunStarted', { session_id: 's-1' }),
+      sseEvent('RunStarted', { run_id: 's-1' }),
       sseEvent('FutureEventType', { some: 'data' }),
       sseEvent('AnotherUnknown', { x: 1 }),
       sseEvent('TextMessageDelta', { delta: 'hello' }),
@@ -1222,7 +1222,7 @@ describe('WebAASDK connection lifecycle', () => {
             pull(controller) {
               if (!sent) {
                 sent = true;
-                controller.enqueue(encoder.encode(sseEvent('RunStarted', { session_id: 's-hb' })));
+                controller.enqueue(encoder.encode(sseEvent('RunStarted', { run_id: 's-hb' })));
                 // Don't close — simulate stall
                 return;
               }
@@ -1237,7 +1237,7 @@ describe('WebAASDK connection lifecycle', () => {
         ok: true,
         status: 200,
         body: createSSEStream([
-          sseEvent('RunStarted', { session_id: 's-hb-2' }),
+          sseEvent('RunStarted', { run_id: 's-hb-2' }),
           sseEvent('RunFinished', {}),
         ]),
       });
@@ -1298,7 +1298,7 @@ describe('WebAASDK connection lifecycle', () => {
     const encoder = new TextEncoder();
     let chunkIndex = 0;
     const chunks = [
-      sseEvent('RunStarted', { session_id: 's-dc' }),
+      sseEvent('RunStarted', { run_id: 's-dc' }),
       sseEvent('TextMessageDelta', { delta: 'hello' }),
       sseEvent('RunFinished', {}),
     ];
