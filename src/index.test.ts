@@ -14,15 +14,19 @@ function makeSkill(overrides: Partial<SkillDefinition> = {}): SkillDefinition {
 }
 
 function mockFetchSuccess(channelId = 'ch-123', protocolVersion = '1.0.0') {
-  let callCount = 0;
   return vi.fn().mockImplementation((url: string) => {
-    callCount++;
-    // First call is to /api/auth/token, second is to /api/sdk/register
     if (typeof url === 'string' && url.includes('/api/auth/token')) {
       return Promise.resolve({
         ok: true,
         status: 200,
         json: async () => ({ access_token: 'test-token-abc', expires_in: 7200 }),
+      });
+    }
+    if (typeof url === 'string' && url.includes('/api/config')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ ui_theme: null, permission_scope: {} }),
       });
     }
     return Promise.resolve({
@@ -63,12 +67,15 @@ describe('WebAASDK.init', () => {
       apiBase: 'https://api.example.com',
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2); // token + register
+    expect(fetchMock).toHaveBeenCalledTimes(3); // token + config + register
     // First call: token acquisition
     const [tokenUrl] = fetchMock.mock.calls[0];
     expect(tokenUrl).toBe('https://api.example.com/api/auth/token');
-    // Second call: register
-    const [url, options] = fetchMock.mock.calls[1];
+    // Second call: config
+    const [configUrl] = fetchMock.mock.calls[1];
+    expect(configUrl).toBe('https://api.example.com/api/config');
+    // Third call: register
+    const [url, options] = fetchMock.mock.calls[2];
     expect(url).toBe('https://api.example.com/api/sdk/register');
     expect(options.method).toBe('POST');
     expect(options.headers['Content-Type']).toBe('application/json');
@@ -96,7 +103,7 @@ describe('WebAASDK.init', () => {
       skills: [makeSkill()],
     });
 
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
     const skillPayload = body.skills[0];
     expect(skillPayload).not.toHaveProperty('execute');
     expect(skillPayload).not.toHaveProperty('promptInjection');
@@ -117,9 +124,9 @@ describe('WebAASDK.init', () => {
     globalThis.fetch = fetchMock;
 
     const sdk = new WebAASDK();
-    await sdk.init({ channelKey: 'key-abc', skills: [] });
+    await sdk.init({ channelKey: 'key-abc', skills: [makeSkill()] });
 
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
     expect(body.protocol_version).toBe('1.0.0');
   });
 
@@ -128,9 +135,9 @@ describe('WebAASDK.init', () => {
     globalThis.fetch = fetchMock;
 
     const sdk = new WebAASDK();
-    await sdk.init({ channelKey: 'key-abc', skills: [], protocolVersion: '2.0.0' });
+    await sdk.init({ channelKey: 'key-abc', skills: [makeSkill()], protocolVersion: '2.0.0' });
 
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
     expect(body.protocol_version).toBe('2.0.0');
   });
 
@@ -144,13 +151,20 @@ describe('WebAASDK.init', () => {
   });
 
   it('should throw error with status and message on 400 from register', async () => {
-    // Token succeeds, register fails
+    // Token succeeds, config succeeds, register fails
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/auth/token')) {
         return Promise.resolve({
           ok: true,
           status: 200,
           json: async () => ({ access_token: 'test-token', expires_in: 7200 }),
+        });
+      }
+      if (url.includes('/api/config')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ui_theme: null, permission_scope: {} }),
         });
       }
       return Promise.resolve({
@@ -168,13 +182,20 @@ describe('WebAASDK.init', () => {
   });
 
   it('should handle non-JSON error responses gracefully', async () => {
-    // Token succeeds, register fails with non-JSON
+    // Token succeeds, config succeeds, register fails with non-JSON
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/auth/token')) {
         return Promise.resolve({
           ok: true,
           status: 200,
           json: async () => ({ access_token: 'test-token', expires_in: 7200 }),
+        });
+      }
+      if (url.includes('/api/config')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ui_theme: null, permission_scope: {} }),
         });
       }
       return Promise.resolve({
@@ -187,7 +208,7 @@ describe('WebAASDK.init', () => {
 
     const sdk = new WebAASDK();
     await expect(
-      sdk.init({ channelKey: 'key-abc', skills: [] })
+      sdk.init({ channelKey: 'key-abc', skills: [makeSkill()] })
     ).rejects.toThrow('Register failed (500): Internal Server Error');
   });
 
@@ -201,7 +222,7 @@ describe('WebAASDK.init', () => {
       skills: [makeSkill({ promptInjection: undefined })],
     });
 
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
     expect(body.skills[0].prompt_injection).toBeNull();
   });
 
@@ -218,7 +239,7 @@ describe('WebAASDK.init', () => {
       ],
     });
 
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
     expect(body.skills).toHaveLength(2);
     expect(body.skills[0].name).toBe('skill_a');
     expect(body.skills[0].execution_mode).toBe('sdk');
@@ -232,9 +253,9 @@ describe('WebAASDK.init', () => {
     globalThis.fetch = fetchMock;
 
     const sdk = new WebAASDK();
-    await sdk.init({ channelKey: 'key-abc', skills: [] });
+    await sdk.init({ channelKey: 'key-abc', skills: [makeSkill()] });
 
-    const [url] = fetchMock.mock.calls[1]; // register call (index 1)
+    const [url] = fetchMock.mock.calls[2]; // register call (index 2)
     expect(url).toBe('/api/sdk/register');
   });
 });
@@ -1252,7 +1273,7 @@ describe('WebAASDK connection lifecycle', () => {
     globalThis.fetch = mockFetchSuccess() as typeof globalThis.fetch;
     await sdk.init({
       channelKey: 'key-abc',
-      skills: [],
+      skills: [makeSkill()],
       apiBase: 'https://api.test',
     });
 

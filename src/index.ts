@@ -16,10 +16,9 @@ export interface SkillDefinition {
 
 export interface InitOptions {
   channelKey: string;
-  skills: SkillDefinition[];
+  skills?: SkillDefinition[];
   apiBase?: string;
   protocolVersion?: string;
-  accessToken?: string;       // Pre-acquired token (optional, skips /api/auth/token call)
   maxRetries?: number;        // default 3
   retryDelay?: number;        // default 1000 (ms)
   heartbeatTimeout?: number;  // default 45000 (ms)
@@ -37,6 +36,13 @@ export interface AGUIEvent {
   payload: Record<string, unknown>;
   protocol_version: string;
   timestamp: string;
+}
+
+export interface ChannelConfig {
+  channel_id?: string;
+  name?: string;
+  permission_scope?: Record<string, unknown>;
+  ui_theme?: Record<string, unknown>;
 }
 
 // Known AG-UI event types that the SDK recognizes
@@ -64,6 +70,7 @@ export class WebAASDK {
   private _skills: Map<string, SkillDefinition> = new Map();
   private _apiBase: string = '';
   private _protocolVersion: string = DEFAULT_PROTOCOL_VERSION;
+  private _channelConfig: ChannelConfig | null = null;
 
   // Connection lifecycle configuration
   private _maxRetries: number = 3;
@@ -78,7 +85,6 @@ export class WebAASDK {
 
   /**
    * Acquire an access token by exchanging the channel_key at POST /api/auth/token.
-   * Stores the token in _accessToken for use in subsequent requests.
    */
   private async _acquireToken(): Promise<void> {
     const response = await fetch(`${this._apiBase}/api/auth/token`, {
@@ -98,8 +104,26 @@ export class WebAASDK {
   }
 
   /**
-   * Initialize the SDK: acquire token, then register skills with the backend via POST /api/sdk/register.
-   * Stores the returned channel_id for subsequent requests.
+   * Fetch channel configuration from GET /api/config.
+   * Returns null on failure (non-critical, caller should use defaults).
+   */
+  private async _fetchChannelConfig(): Promise<ChannelConfig | null> {
+    try {
+      const response = await fetch(`${this._apiBase}/api/config`, {
+        headers: { 'Authorization': `Bearer ${this._accessToken}` },
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Initialize the SDK:
+   * 1. Acquire access token
+   * 2. Fetch channel config
+   * 3. Register skills with backend
    */
   async init(options: InitOptions): Promise<void> {
     this._apiBase = options.apiBase ?? '';
@@ -110,62 +134,62 @@ export class WebAASDK {
     this._heartbeatTimeout = options.heartbeatTimeout ?? 45000;
     this._disconnected = false;
 
-    for (const skill of options.skills) {
+    const skills = options.skills ?? [];
+    for (const skill of skills) {
       this._skills.set(skill.name, skill);
     }
 
-    // Acquire access token: use pre-acquired token if provided, otherwise call /api/auth/token
-    if (options.accessToken) {
-      this._accessToken = options.accessToken;
-    } else {
-      await this._acquireToken();
+    // 1. Acquire access token
+    await this._acquireToken();
+
+    // 2. Fetch channel config (non-critical)
+    this._channelConfig = await this._fetchChannelConfig();
+
+    // 3. Register skills with backend
+    if (skills.length > 0) {
+      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode }) => ({
+        name,
+        schema,
+        prompt_injection: promptInjection ?? null,
+        execution_mode: executionMode,
+      }));
+
+      const response = await fetch(`${this._apiBase}/api/sdk/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this._accessToken}`,
+        },
+        body: JSON.stringify({
+          skills: skillsMeta,
+          protocol_version: this._protocolVersion,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ detail: response.statusText }));
+        const message = body.detail ?? body.message ?? response.statusText;
+        throw new Error(`Register failed (${response.status}): ${message}`);
+      }
+
+      const data = await response.json();
+      this._channelId = data.channel_id;
     }
-
-    // Build register payload — metadata only, exclude execute functions
-    const skillsMeta = options.skills.map(({ name, schema, promptInjection, executionMode }) => ({
-      name,
-      schema,
-      prompt_injection: promptInjection ?? null,
-      execution_mode: executionMode,
-    }));
-
-    const response = await fetch(`${this._apiBase}/api/sdk/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this._accessToken}`,
-      },
-      body: JSON.stringify({
-        skills: skillsMeta,
-        protocol_version: this._protocolVersion,
-      }),
-    });
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({ detail: response.statusText }));
-      const message = body.detail ?? body.message ?? response.statusText;
-      throw new Error(`Register failed (${response.status}): ${message}`);
-    }
-
-    const data = await response.json();
-    this._channelId = data.channel_id;
   }
 
   /**
    * Send a user prompt to the agent and return an EventEmitter that streams AG-UI events.
-   *
-   * POSTs to /api/agent/run, parses the SSE response stream, and emits:
-   * - Typed events (event name = event type, e.g. 'RunStarted', 'TextMessageDelta')
-   * - Generic 'event' for every parsed event
-   * - 'done' when RunFinished is received
-   * - 'error' on Error events or fetch/parse failures
    */
   run(options: RunOptions): EventEmitter {
     const emitter = new EventEmitter();
     this._disconnected = false;
 
-    this._startSSEStream(options, emitter, 0, false);
+    // Preserve session_id if provided (e.g. cross-page resume)
+    if (options.sessionId) {
+      this._sessionId = options.sessionId;
+    }
 
+    this._startSSEStream(options, emitter, 0, false);
     return emitter;
   }
 
@@ -196,26 +220,20 @@ export class WebAASDK {
         const message = errBody.detail ?? errBody.message ?? response.statusText;
         const error = new Error(`Run failed (${status}): ${message}`);
 
-        // 401: attempt token refresh once
         if (status === 401 && !_isRetryAfterRefresh) {
-          try {
-            await this._acquireToken();
-          } catch (refreshErr) {
+          try { await this._acquireToken(); } catch (refreshErr) {
             emitter.emit('error', refreshErr instanceof Error ? refreshErr : new Error(String(refreshErr)));
             return;
           }
-          // Retry with new token
           await this._startSSEStream(options, emitter, retryCount, true);
           return;
         }
 
-        // 4xx errors: no reconnect, emit error immediately
         if (status >= 400 && status < 500) {
           emitter.emit('error', error);
           return;
         }
 
-        // Non-4xx errors: attempt reconnect
         if (retryCount < this._maxRetries && !this._disconnected) {
           this._scheduleReconnect(options, emitter, retryCount);
           return;
@@ -233,20 +251,15 @@ export class WebAASDK {
       await this._parseSSEStream(response.body, emitter, options, retryCount);
     } catch (err) {
       if (this._disconnected) return;
-
       const error = err instanceof Error ? err : new Error(String(err));
-
-      // Network errors are non-4xx — attempt reconnect
       if (retryCount < this._maxRetries && !this._disconnected) {
         this._scheduleReconnect(options, emitter, retryCount);
         return;
       }
-
       emitter.emit('error', error);
     }
   }
 
-  /** Schedule a reconnection attempt after retryDelay. */
   private _scheduleReconnect(options: RunOptions, emitter: EventEmitter, retryCount: number): void {
     if (this._disconnected) return;
     this._reconnectTimer = setTimeout(() => {
@@ -257,22 +270,16 @@ export class WebAASDK {
     }, this._retryDelay);
   }
 
-  /** Reset the heartbeat timer. Call whenever an SSE event is received. */
   private _resetHeartbeat(options: RunOptions, emitter: EventEmitter, retryCount: number): void {
     this._clearHeartbeat();
     if (this._disconnected) return;
     this._heartbeatTimer = setTimeout(() => {
       this._heartbeatTimer = null;
       if (this._disconnected) return;
-
-      // Heartbeat timeout — treat connection as dead
-      // Cancel the active reader
       if (this._activeReader) {
         try { this._activeReader.cancel(); } catch { /* ignore */ }
         this._activeReader = null;
       }
-
-      // Attempt reconnect if retries remain
       if (retryCount < this._maxRetries) {
         this._scheduleReconnect(options, emitter, retryCount);
       } else {
@@ -281,7 +288,6 @@ export class WebAASDK {
     }, this._heartbeatTimeout);
   }
 
-  /** Clear the heartbeat timer. */
   private _clearHeartbeat(): void {
     if (this._heartbeatTimer !== null) {
       clearTimeout(this._heartbeatTimer);
@@ -289,7 +295,6 @@ export class WebAASDK {
     }
   }
 
-  /** Internal: reads a ReadableStream, parses SSE `data:` lines, and emits events. */
   private async _parseSSEStream(
     body: ReadableStream<Uint8Array>,
     emitter: EventEmitter,
@@ -301,7 +306,6 @@ export class WebAASDK {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    // Start heartbeat monitoring
     this._resetHeartbeat(options, emitter, retryCount);
 
     try {
@@ -310,7 +314,6 @@ export class WebAASDK {
 
         const { done, value } = await reader.read();
         if (done) {
-          // Stream ended unexpectedly (not via RunFinished) — attempt reconnect
           this._clearHeartbeat();
           if (!this._disconnected && retryCount < this._maxRetries) {
             this._scheduleReconnect(options, emitter, retryCount);
@@ -319,14 +322,10 @@ export class WebAASDK {
           break;
         }
 
-        // Reset heartbeat on any data received
         this._resetHeartbeat(options, emitter, retryCount);
-
         buffer += decoder.decode(value, { stream: true });
 
-        // SSE events are separated by double newlines
         const parts = buffer.split('\n\n');
-        // Keep the last (possibly incomplete) chunk in the buffer
         buffer = parts.pop() ?? '';
 
         for (const part of parts) {
@@ -335,44 +334,32 @@ export class WebAASDK {
           for (const line of part.split('\n')) {
             if (!line.startsWith('data: ')) continue;
 
-            const jsonStr = line.slice(6); // strip "data: "
+            const jsonStr = line.slice(6);
             let event: AGUIEvent;
-            try {
-              event = JSON.parse(jsonStr);
-            } catch {
-              continue; // skip malformed JSON
-            }
+            try { event = JSON.parse(jsonStr); } catch { continue; }
 
-            // Track session_id from RunStarted events
             if (event.type === 'RunStarted' && event.payload?.session_id) {
               this._sessionId = event.payload.session_id as string;
             }
 
-            // Silently ignore unknown event types (Req 13.4)
-            if (!KNOWN_EVENT_TYPES.has(event.type)) {
-              continue;
-            }
+            if (!KNOWN_EVENT_TYPES.has(event.type)) continue;
 
-            // Emit typed event (event name = event type)
             emitter.emit(event.type, event);
-            // Emit generic 'event' for all events
             emitter.emit('event', event);
 
-            // Handle terminal events
             if (event.type === 'RunFinished') {
               this._clearHeartbeat();
               this._activeReader = null;
               emitter.emit('done', event);
-              return; // Normal completion — no reconnect
+              return;
             }
             if (event.type === 'Error') {
               this._clearHeartbeat();
               this._activeReader = null;
               emitter.emit('error', event);
-              return; // Error event — close connection, no reconnect
+              return;
             }
 
-            // Auto-dispatch SkillExecuteInstruction
             if (event.type === 'SkillExecuteInstruction') {
               const skillName = event.payload.skill_name as string;
               const params = (event.payload.params ?? {}) as Record<string, unknown>;
@@ -396,7 +383,6 @@ export class WebAASDK {
                 };
               }
 
-              // Emit ToolCallEnd so the UI can mark the step as complete immediately
               const toolCallEndEvent: AGUIEvent = {
                 type: 'ToolCallEnd',
                 payload: {
@@ -410,20 +396,13 @@ export class WebAASDK {
               emitter.emit('ToolCallEnd', toolCallEndEvent);
               emitter.emit('event', toolCallEndEvent);
 
-              // Release the current reader before starting the follow-up request
               this._clearHeartbeat();
               this._activeReader = null;
               reader.releaseLock();
 
-              // Pipe the follow-up run's events to the same emitter
               await this._startSSEStream(
-                {
-                  userInput: '',
-                  sessionId: this._sessionId ?? undefined,
-                  toolResult,
-                },
-                emitter,
-                0, // Reset retry count for follow-up requests
+                { userInput: '', sessionId: this._sessionId ?? undefined, toolResult },
+                emitter, 0,
               );
               return;
             }
@@ -433,13 +412,10 @@ export class WebAASDK {
     } catch (err) {
       this._clearHeartbeat();
       if (this._disconnected) return;
-
-      // Stream read error — attempt reconnect
       if (retryCount < this._maxRetries && !this._disconnected) {
         this._scheduleReconnect(options, emitter, retryCount);
         return;
       }
-
       emitter.emit('error', err instanceof Error ? err : new Error(String(err)));
     } finally {
       this._activeReader = null;
@@ -449,53 +425,33 @@ export class WebAASDK {
 
   /**
    * Register a local skill execute handler without sending it to the backend.
-   * Use this for platform builtin skills (e.g. wait_skill, dialog_skill, http_skill)
-   * whose schemas are provided by the backend but whose execution happens on the SDK side.
    */
   registerLocalSkill(name: string, execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>): void {
-    this._skills.set(name, {
-      name,
-      schema: {},
-      executionMode: 'sdk',
-      execute,
-    });
+    this._skills.set(name, { name, schema: {}, executionMode: 'sdk', execute });
   }
 
   /**
-   * Disconnect from the backend, close any active SSE connections,
-   * and cancel pending reconnection attempts.
+   * Disconnect from the backend, close any active SSE connections.
    */
   disconnect(): void {
     this._disconnected = true;
-
-    // Cancel pending reconnection timer
     if (this._reconnectTimer !== null) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
     }
-
-    // Clear heartbeat timer
     this._clearHeartbeat();
-
-    // Cancel active SSE reader
     if (this._activeReader) {
       try { this._activeReader.cancel(); } catch { /* ignore */ }
       this._activeReader = null;
     }
   }
 
-  /** SDK package version (semver). */
-  get version(): string {
-    return SDK_VERSION;
-  }
+  // ── Public getters ──
 
-  /** Channel ID returned by the backend after registration, or null if not yet initialized. */
-  get channelId(): string | null {
-    return this._channelId;
-  }
-
-  /** Current session ID, or null if no session is active. */
-  get sessionId(): string | null {
-    return this._sessionId;
-  }
+  get version(): string { return SDK_VERSION; }
+  get channelId(): string | null { return this._channelId; }
+  get sessionId(): string | null { return this._sessionId; }
+  get accessToken(): string | null { return this._accessToken; }
+  get apiBase(): string { return this._apiBase; }
+  get channelConfig(): ChannelConfig | null { return this._channelConfig; }
 }
