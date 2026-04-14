@@ -6,12 +6,31 @@ const DEFAULT_PROTOCOL_VERSION = '1.0.0';
 
 // ── Public API Types ──
 
+/** Lightweight event emitter interface exposed in public API (avoids @types/node dependency). */
+export interface SDKEventEmitter {
+  on(event: string, handler: (...args: any[]) => void): this;
+  off(event: string, handler: (...args: any[]) => void): this;
+  once(event: string, handler: (...args: any[]) => void): this;
+  emit(event: string, ...args: any[]): boolean;
+  removeAllListeners(event?: string): this;
+}
+
+export interface SkillCachePolicy {
+  enabled: boolean;
+  ttl: number;                          // ms, 0 = no expiry
+  mode: 'snapshot' | 'append' | 'none';
+  invalidateOn?: string[];              // SDK-side events that invalidate cache
+}
+
+export type CacheFreshness = 'fresh' | 'stale' | 'expired';
+
 export interface SkillDefinition {
   name: string;
   schema: Record<string, unknown>;
   promptInjection?: string;
   executionMode: 'sdk' | 'backend';
   execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  cache?: SkillCachePolicy;
 }
 
 export interface UserIdentity {
@@ -38,6 +57,7 @@ export interface RunOptions {
   threadId?: string;
   runId?: string;
   toolResult?: Record<string, unknown>;
+  files?: File[];  // Optional file uploads — triggers multipart request
 }
 
 export interface AGUIEvent {
@@ -93,6 +113,17 @@ export class WebAASDK {
   private _activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private _onIdentifyCallbacks: Array<() => void> = [];
+  private _onResetCallbacks: Array<() => void> = [];
+
+  // L1 SDK Auto Cache
+  private _skillCache: Map<string, {
+    result: Record<string, unknown>;
+    freshness: CacheFreshness;
+    timestamp: number;
+    policy: SkillCachePolicy;
+  }> = new Map();
+  private _invalidateListeners: Array<() => void> = [];
 
   /**
    * Acquire an access token by exchanging the channel_key at POST /api/auth/token.
@@ -196,7 +227,7 @@ export class WebAASDK {
   /**
    * Send a user prompt to the agent and return an EventEmitter that streams AG-UI events.
    */
-  run(options: RunOptions): EventEmitter {
+  run(options: RunOptions): SDKEventEmitter {
     const emitter = new EventEmitter();
     this._disconnected = false;
 
@@ -223,6 +254,11 @@ export class WebAASDK {
         user_input: options.userInput,
         context: options.context ?? {},
       };
+      // L1: inject skill cache into context
+      const cacheCtx = this._buildCacheContext();
+      if (cacheCtx) {
+        (body.context as Record<string, unknown>).skill_cache = cacheCtx;
+      }
       if (options.runId !== undefined) body.run_id = options.runId;
       if (options.toolResult !== undefined) body.tool_result = options.toolResult;
       if (this._userId) body.user_id = this._userId;
@@ -232,14 +268,36 @@ export class WebAASDK {
         body.thread_id = this._threadId;
       }
 
-      const response = await fetch(`${this._apiBase}/api/agent/run`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this._accessToken}`,
-        },
-        body: JSON.stringify(body),
-      });
+      const hasFiles = options.files && options.files.length > 0;
+      let response: Response;
+
+      if (hasFiles) {
+        // Multipart request with files
+        const formData = new FormData();
+        formData.append('user_input', options.userInput);
+        formData.append('context', JSON.stringify(body.context));
+        if (body.run_id !== undefined) formData.append('run_id', String(body.run_id));
+        if (body.user_id !== undefined) formData.append('user_id', String(body.user_id));
+        if (body.thread_id !== undefined) formData.append('thread_id', String(body.thread_id));
+        for (const file of options.files!) {
+          formData.append('files', file);
+        }
+        response = await fetch(`${this._apiBase}/api/agent/run`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${this._accessToken}` },
+          body: formData,
+        });
+      } else {
+        // JSON request (no files, backward compatible)
+        response = await fetch(`${this._apiBase}/api/agent/run`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this._accessToken}`,
+          },
+          body: JSON.stringify(body),
+        });
+      }
 
       if (!response.ok) {
         const status = response.status;
@@ -332,6 +390,7 @@ export class WebAASDK {
     this._activeReader = reader;
     const decoder = new TextDecoder();
     let buffer = '';
+    let receivedFinish = false;
 
     this._resetHeartbeat(options, emitter, retryCount);
 
@@ -342,7 +401,8 @@ export class WebAASDK {
         const { done, value } = await reader.read();
         if (done) {
           this._clearHeartbeat();
-          if (!this._disconnected && retryCount < this._maxRetries) {
+          // Only retry if we didn't receive RunFinished/Error (abnormal stream end)
+          if (!receivedFinish && !this._disconnected && retryCount < this._maxRetries) {
             this._scheduleReconnect(options, emitter, retryCount);
             return;
           }
@@ -378,12 +438,14 @@ export class WebAASDK {
             emitter.emit('event', event);
 
             if (event.type === 'RunFinished') {
+              receivedFinish = true;
               this._clearHeartbeat();
               this._activeReader = null;
               emitter.emit('done', event);
               return;
             }
             if (event.type === 'Error') {
+              receivedFinish = true;
               this._clearHeartbeat();
               this._activeReader = null;
               emitter.emit('error', event);
@@ -402,6 +464,8 @@ export class WebAASDK {
                 try {
                   const result = await skill.execute(params);
                   toolResult = { tool_call_id: toolCallId, result };
+                  // L1: cache the result
+                  this._cacheSkillResult(skillName, result);
                 } catch (err) {
                   const message = err instanceof Error ? err.message : String(err);
                   toolResult = { tool_call_id: toolCallId, result: { error: message } };
@@ -478,6 +542,17 @@ export class WebAASDK {
       const body = await response.json().catch(() => ({ detail: response.statusText }));
       throw new Error(`Identify failed (${response.status}): ${body.detail ?? response.statusText}`);
     }
+
+    for (const cb of this._onIdentifyCallbacks) {
+      try { cb(); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Register a callback to run after identify() succeeds.
+   */
+  onIdentify(callback: () => void): void {
+    this._onIdentifyCallbacks.push(callback);
   }
 
   /**
@@ -507,11 +582,53 @@ export class WebAASDK {
   }
 
   /**
+   * Start a new conversation thread, resetting current run/thread state.
+   * If user is identified, creates a server-side thread.
+   * Returns the new thread id (or null if no user identified).
+   */
+  async newThread(): Promise<string | null> {
+    this.disconnect();
+    this._runId = null;
+    this._threadId = null;
+    this._disconnected = false;
+    this._clearCache();
+
+    if (this._userId && this._accessToken) {
+      const thread = await this.createThread();
+      return thread.id;
+    }
+    return null;
+  }
+
+  /**
+   * Switch to an existing thread by id, loading its message history.
+   * Returns the thread data including messages array.
+   */
+  async switchThread(threadId: string): Promise<Record<string, unknown>> {
+    if (!this._accessToken) throw new Error('SDK not initialized');
+
+    this.disconnect();
+    this._runId = null;
+    this._threadId = threadId;
+
+    const response = await fetch(`${this._apiBase}/api/sdk/threads/${encodeURIComponent(threadId)}`, {
+      headers: { 'Authorization': `Bearer ${this._accessToken}` },
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Switch thread failed: ${body.detail ?? response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
    * List threads for the current user.
+   * Returns empty array if user is not identified.
    */
   async listThreads(limit = 20, offset = 0): Promise<Array<Record<string, unknown>>> {
-    if (!this._userId) throw new Error('Call identify() before listing threads');
-    if (!this._accessToken) throw new Error('SDK not initialized');
+    if (!this._userId || !this._accessToken) return [];
 
     const params = new URLSearchParams({
       user_id: this._userId,
@@ -548,6 +665,112 @@ export class WebAASDK {
       try { this._activeReader.cancel(); } catch { /* ignore */ }
       this._activeReader = null;
     }
+  }
+
+  /**
+   * Reset user state (logout). Disconnects, clears userId/threadId/runId.
+   * Fires onReset callbacks so upper layers can clean up UI.
+   */
+  reset(): void {
+    this.disconnect();
+    this._userId = null;
+    this._runId = null;
+    this._threadId = null;
+    this._disconnected = false;
+    this._clearCache();
+    for (const cb of this._onResetCallbacks) {
+      try { cb(); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Register a callback to run when reset() is called (user logout).
+   */
+  onReset(callback: () => void): void {
+    this._onResetCallbacks.push(callback);
+  }
+
+  // ── L1 SDK Auto Cache ──
+
+  /**
+   * Update cache after a skill execution. Called automatically by _parseSSEStream.
+   */
+  private _cacheSkillResult(skillName: string, result: Record<string, unknown>): void {
+    const skill = this._skills.get(skillName);
+    if (!skill?.cache?.enabled) return;
+
+    const policy = skill.cache;
+    const existing = this._skillCache.get(skillName);
+
+    if (policy.mode === 'snapshot') {
+      // Overwrite previous result
+      this._skillCache.set(skillName, {
+        result, freshness: 'fresh', timestamp: Date.now(), policy,
+      });
+    } else if (policy.mode === 'append' && existing) {
+      // Merge into existing (shallow merge for arrays, deep merge for objects)
+      const merged = Array.isArray(existing.result) && Array.isArray(result)
+        ? [...existing.result, ...result]
+        : { ...existing.result, ...result };
+      this._skillCache.set(skillName, {
+        result: merged as Record<string, unknown>, freshness: 'fresh', timestamp: Date.now(), policy,
+      });
+    } else if (policy.mode === 'append') {
+      this._skillCache.set(skillName, {
+        result, freshness: 'fresh', timestamp: Date.now(), policy,
+      });
+    }
+    // mode === 'none': don't cache
+  }
+
+  /**
+   * Build the skill_cache object to inject into run context.
+   * Only includes fresh/stale entries (expired are excluded).
+   */
+  private _buildCacheContext(): Record<string, { result: Record<string, unknown>; freshness: CacheFreshness }> | null {
+    this._refreshCacheFreshness();
+    const entries: Record<string, { result: Record<string, unknown>; freshness: CacheFreshness }> = {};
+    let hasEntries = false;
+
+    for (const [name, entry] of this._skillCache) {
+      if (entry.freshness === 'expired') continue;
+      entries[name] = { result: entry.result, freshness: entry.freshness };
+      hasEntries = true;
+    }
+
+    return hasEntries ? entries : null;
+  }
+
+  /**
+   * Check TTL and update freshness for all cached entries.
+   */
+  private _refreshCacheFreshness(): void {
+    const now = Date.now();
+    for (const [name, entry] of this._skillCache) {
+      if (entry.freshness === 'expired') continue;
+      if (entry.policy.ttl > 0 && (now - entry.timestamp) > entry.policy.ttl) {
+        entry.freshness = 'expired';
+      }
+    }
+  }
+
+  /**
+   * Invalidate cache entries by event name (e.g. 'urlchange', 'dom:mutation:10').
+   */
+  invalidateCache(eventName: string): void {
+    for (const [name, entry] of this._skillCache) {
+      if (entry.freshness === 'expired') continue;
+      if (entry.policy.invalidateOn?.includes(eventName)) {
+        entry.freshness = 'stale';
+      }
+    }
+  }
+
+  /**
+   * Clear all cache entries (called on reset/newThread).
+   */
+  private _clearCache(): void {
+    this._skillCache.clear();
   }
 
   // ── Public getters ──
