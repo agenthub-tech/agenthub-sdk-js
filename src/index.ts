@@ -31,6 +31,7 @@ export interface SkillDefinition {
   executionMode: 'sdk' | 'backend';
   execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   cache?: SkillCachePolicy;
+  resultCacheFields?: Array<{ path: string; ttl?: number }>;
 }
 
 export interface UserIdentity {
@@ -49,6 +50,7 @@ export interface InitOptions {
   maxRetries?: number;        // default 3
   retryDelay?: number;        // default 1000 (ms)
   heartbeatTimeout?: number;  // default 45000 (ms)
+  debug?: boolean;            // default false
 }
 
 export interface RunOptions {
@@ -99,9 +101,11 @@ export class WebAASDK {
   private _threadId: string | null = null;
   private _userId: string | null = null;
   private _skills: Map<string, SkillDefinition> = new Map();
+  private _localSkills: Map<string, (params: Record<string, unknown>) => Promise<Record<string, unknown>>> = new Map();
   private _apiBase: string = '';
   private _protocolVersion: string = DEFAULT_PROTOCOL_VERSION;
   private _channelConfig: ChannelConfig | null = null;
+  private _debug: boolean = false;
 
   // Connection lifecycle configuration
   private _maxRetries: number = 3;
@@ -124,6 +128,16 @@ export class WebAASDK {
     policy: SkillCachePolicy;
   }> = new Map();
   private _invalidateListeners: Array<() => void> = [];
+
+  // ── Debug Logging ──
+
+  private _log(format: string, ...args: unknown[]): void {
+    if (!this._debug) return;
+    const msg = args.length > 0
+      ? format.replace(/%[sd]/g, () => String(args.shift()))
+      : format;
+    console.log(`[WebAA SDK] ${msg}`);
+  }
 
   /**
    * Acquire an access token by exchanging the channel_key at POST /api/auth/token.
@@ -174,7 +188,10 @@ export class WebAASDK {
     this._maxRetries = options.maxRetries ?? 3;
     this._retryDelay = options.retryDelay ?? 1000;
     this._heartbeatTimeout = options.heartbeatTimeout ?? 45000;
+    this._debug = options.debug ?? false;
     this._disconnected = false;
+
+    this._log('init start | apiBase=%s channelKey=%s protocol=%s debug=%s', this._apiBase, this._channelKey, this._protocolVersion, this._debug);
 
     const skills = options.skills ?? [];
     for (const skill of skills) {
@@ -183,17 +200,20 @@ export class WebAASDK {
 
     // 1. Acquire access token
     await this._acquireToken();
+    this._log('token acquired');
 
     // 2. Fetch channel config (non-critical)
     this._channelConfig = await this._fetchChannelConfig();
+    this._log('config fetched | channelConfig=%s', this._channelConfig ? 'ok' : 'null');
 
     // 3. Register skills with backend
     if (skills.length > 0) {
-      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode }) => ({
+      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode, resultCacheFields }) => ({
         name,
         schema,
         prompt_injection: promptInjection ?? null,
         execution_mode: executionMode,
+        ...(resultCacheFields ? { result_cache_fields: resultCacheFields } : {}),
       }));
 
       const response = await fetch(`${this._apiBase}/api/sdk/register`, {
@@ -216,12 +236,16 @@ export class WebAASDK {
 
       const data = await response.json();
       this._channelId = data.channel_id;
+      this._log('skills registered | count=%s channelId=%s', skills.length, this._channelId);
     }
 
     // 4. Identify user if provided
     if (options.user) {
       await this.identify(options.user);
+      this._log('user identified | userId=%s', options.user.userId);
     }
+
+    this._log('init complete');
   }
 
   /**
@@ -241,6 +265,8 @@ export class WebAASDK {
       this._threadId = options.threadId;
     }
 
+    this._log('run | userInput="%s" runId=%s threadId=%s', (options.userInput ?? '').slice(0, 80), options.runId, options.threadId);
+
     this._startSSEStream(options, emitter, 0, false);
     return emitter;
   }
@@ -248,6 +274,8 @@ export class WebAASDK {
   /** Internal: performs the POST, reads the SSE stream, and drives the emitter. */
   private async _startSSEStream(options: RunOptions, emitter: EventEmitter, retryCount: number, _isRetryAfterRefresh: boolean = false): Promise<void> {
     if (this._disconnected) return;
+
+    this._log('sse-connect | retry=%s/%s', retryCount, this._maxRetries);
 
     try {
       const body: Record<string, unknown> = {
@@ -430,6 +458,7 @@ export class WebAASDK {
               if (event.payload.thread_id) {
                 this._threadId = event.payload.thread_id as string;
               }
+              this._log('event RunStarted | runId=%s threadId=%s', this._runId, this._threadId);
             }
 
             if (!KNOWN_EVENT_TYPES.has(event.type)) continue;
@@ -438,6 +467,7 @@ export class WebAASDK {
             emitter.emit('event', event);
 
             if (event.type === 'RunFinished') {
+              this._log('event RunFinished');
               receivedFinish = true;
               this._clearHeartbeat();
               this._activeReader = null;
@@ -445,6 +475,7 @@ export class WebAASDK {
               return;
             }
             if (event.type === 'Error') {
+              this._log('event Error | %s', event.payload?.message);
               receivedFinish = true;
               this._clearHeartbeat();
               this._activeReader = null;
@@ -457,20 +488,29 @@ export class WebAASDK {
               const params = (event.payload.params ?? {}) as Record<string, unknown>;
               const toolCallId = event.payload.tool_call_id as string;
 
-              const skill = this._skills.get(skillName);
+              this._log('event SkillExecuteInstruction | skill=%s toolCallId=%s', skillName, toolCallId);
+
+              // Skill lookup: init-registered skills take priority over localSkills
+              const initSkill = this._skills.get(skillName);
+              const localExecute = this._localSkills.get(skillName);
+              const executeFunc = initSkill?.execute ?? localExecute;
               let toolResult: Record<string, unknown>;
 
-              if (skill) {
+              if (executeFunc) {
                 try {
-                  const result = await skill.execute(params);
+                  this._log('skill-exec | skill=%s', skillName);
+                  const result = await executeFunc(params);
                   toolResult = { tool_call_id: toolCallId, result };
+                  this._log('skill-exec ok | skill=%s', skillName);
                   // L1: cache the result
                   this._cacheSkillResult(skillName, result);
                 } catch (err) {
                   const message = err instanceof Error ? err.message : String(err);
+                  this._log('skill-exec error | skill=%s error=%s', skillName, message);
                   toolResult = { tool_call_id: toolCallId, result: { error: message } };
                 }
               } else {
+                this._log('skill-exec miss | skill=%s not registered', skillName);
                 toolResult = {
                   tool_call_id: toolCallId,
                   result: { error: `Skill '${skillName}' not registered locally` },
@@ -493,6 +533,14 @@ export class WebAASDK {
               this._clearHeartbeat();
               this._activeReader = null;
               reader.releaseLock();
+
+              // Refresh token before resume (skill execution may take long, token could expire)
+              try {
+                await this._acquireToken();
+                this._log('token refreshed before resume');
+              } catch (e) {
+                this._log('token refresh failed before resume: %s', e instanceof Error ? e.message : String(e));
+              }
 
               await this._startSSEStream(
                 { userInput: '', runId: this._runId ?? undefined, toolResult },
@@ -648,13 +696,14 @@ export class WebAASDK {
    * Register a local skill execute handler without sending it to the backend.
    */
   registerLocalSkill(name: string, execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>): void {
-    this._skills.set(name, { name, schema: {}, executionMode: 'sdk', execute });
+    this._localSkills.set(name, execute);
   }
 
   /**
    * Disconnect from the backend, close any active SSE connections.
    */
   disconnect(): void {
+    this._log('disconnect');
     this._disconnected = true;
     if (this._reconnectTimer !== null) {
       clearTimeout(this._reconnectTimer);
@@ -672,6 +721,7 @@ export class WebAASDK {
    * Fires onReset callbacks so upper layers can clean up UI.
    */
   reset(): void {
+    this._log('reset');
     this.disconnect();
     this._userId = null;
     this._runId = null;
