@@ -1,7 +1,7 @@
 {
-  "name": "@webaa/sdk",
-  "version": "0.1.0",
-  "description": "WebAA JS(Node) SDK — headless AG-UI protocol client",
+  "name": "agenthub-sdk",
+  "version": "1.0.0",
+  "description": "AgentHub JS(Node) SDK — headless AG-UI protocol client",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -15,7 +15,7 @@
     "lint": "tsc --noEmit"
   },
   "keywords": [
-    "webaa",
+    "agenthub",
     "agent",
     "ag-ui",
     "sdk"
