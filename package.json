@@ -5,13 +5,6 @@
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
   "files": [
     "dist"
   ],
@@ -28,6 +21,9 @@
     "sdk"
   ],
   "license": "MIT",
+  "dependencies": {
+    "events": "^3.3.0"
+  },
   "devDependencies": {
     "@types/node": "^18.19.130",
     "fast-check": "^3.19.0",
