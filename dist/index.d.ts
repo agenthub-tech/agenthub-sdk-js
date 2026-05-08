@@ -41,8 +41,6 @@ export interface InitOptions {
     retryDelay?: number;
     heartbeatTimeout?: number;
     debug?: boolean;
-    /** Enable built-in skill handlers (chart_skill, dialog_skill). Default: true */
-    enableBuiltinSkills?: boolean;
     /** Callback when chart_skill result is received (backend execution) */
     onChartResult?: (result: ChartSkillResult) => void;
     /** Custom dialog handler. If not provided, uses browser native confirm/prompt */

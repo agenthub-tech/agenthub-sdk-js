@@ -51,8 +51,6 @@ export interface InitOptions {
   retryDelay?: number;        // default 1000 (ms)
   heartbeatTimeout?: number;  // default 45000 (ms)
   debug?: boolean;            // default false
-  /** Enable built-in skill handlers (chart_skill, dialog_skill). Default: true */
-  enableBuiltinSkills?: boolean;
   /** Callback when chart_skill result is received (backend execution) */
   onChartResult?: (result: ChartSkillResult) => void;
   /** Custom dialog handler. If not provided, uses browser native confirm/prompt */
@@ -323,14 +321,10 @@ export class WebAASDK {
       this._log('user identified | userId=%s', options.user.userId);
     }
 
-    // 5. Register built-in skill handlers if enabled
-    const enableBuiltin = options.enableBuiltinSkills !== false; // default true
-    if (enableBuiltin) {
-      this._registerBuiltinSkillHandlers(options);
-      this._log('builtin skill handlers registered');
-    }
+    // 5. Register built-in skill handlers (dialog_skill)
+    this._registerBuiltinSkillHandlers(options);
 
-    // Store callbacks for chart/dialog events
+    // Store chart callback for ToolCallEnd handling
     if (options.onChartResult) {
       this._builtinCallbacks.onChartResult = options.onChartResult;
     }

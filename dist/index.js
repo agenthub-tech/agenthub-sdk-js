@@ -150,13 +150,9 @@ export class WebAASDK {
             await this.identify(options.user);
             this._log('user identified | userId=%s', options.user.userId);
         }
-        // 5. Register built-in skill handlers if enabled
-        const enableBuiltin = options.enableBuiltinSkills !== false; // default true
-        if (enableBuiltin) {
-            this._registerBuiltinSkillHandlers(options);
-            this._log('builtin skill handlers registered');
-        }
-        // Store callbacks for chart/dialog events
+        // 5. Register built-in skill handlers (dialog_skill)
+        this._registerBuiltinSkillHandlers(options);
+        // Store chart callback for ToolCallEnd handling
         if (options.onChartResult) {
             this._builtinCallbacks.onChartResult = options.onChartResult;
         }
