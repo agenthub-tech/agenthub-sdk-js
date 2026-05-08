@@ -25,17 +25,29 @@
     "events": "^3.3.0"
   },
   "peerDependencies": {
-    "echarts": ">=5.0.0"
+    "echarts": ">=5.0.0",
+    "react": ">=17.0.0",
+    "react-dom": ">=17.0.0"
   },
   "peerDependenciesMeta": {
     "echarts": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/node": "^18.19.130",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
     "echarts": "^5.5.0",
     "fast-check": "^3.19.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "typescript": "^4.9.5",
     "vitest": "^1.6.0"
   }

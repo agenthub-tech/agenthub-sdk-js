@@ -917,4 +917,6 @@ export class WebAASDK {
     get apiBase() { return this._apiBase; }
     get channelConfig() { return this._channelConfig; }
 }
+// Re-export React components
+export { Chart, Message, MessageList } from './components';
 //# sourceMappingURL=index.js.map

@@ -1136,3 +1136,7 @@ export class WebAASDK {
   get apiBase(): string { return this._apiBase; }
   get channelConfig(): ChannelConfig | null { return this._channelConfig; }
 }
+
+// Re-export React components
+export { Chart, Message, MessageList } from './components';
+export type { ChartProps, MessageData, MessageProps, MessageListProps } from './components';

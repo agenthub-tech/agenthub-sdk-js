@@ -275,4 +275,6 @@ export declare class WebAASDK {
     get apiBase(): string;
     get channelConfig(): ChannelConfig | null;
 }
+export { Chart, Message, MessageList } from './components';
+export type { ChartProps, MessageData, MessageProps, MessageListProps } from './components';
 //# sourceMappingURL=index.d.ts.map
