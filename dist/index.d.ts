@@ -88,6 +88,23 @@ export interface EChartsOption {
     legend?: Record<string, unknown>;
     [key: string]: unknown;
 }
+/** Chart renderer options */
+export interface ChartRendererOptions {
+    /** Container element or selector to render the chart */
+    container: HTMLElement | string;
+    /** Chart data from chart_skill result */
+    chartData: ChartSkillResult;
+    /** Width of the chart (default: 100%) */
+    width?: string | number;
+    /** Height of the chart (default: 280px) */
+    height?: string | number;
+    /** Show chart type switcher (default: true) */
+    showTypeSwitcher?: boolean;
+    /** Primary color for switcher buttons (default: #1890ff) */
+    primaryColor?: string;
+    /** Callback when chart type is changed */
+    onChartTypeChange?: (newType: ChartType) => void;
+}
 /** Dialog handler for dialog_skill */
 export interface DialogHandler {
     confirm?: (message: string) => Promise<boolean>;
@@ -222,6 +239,14 @@ export declare class WebAASDK {
      * Called automatically during init() when enableBuiltinSkills is true.
      */
     private _registerBuiltinSkillHandlers;
+    /**
+     * Render a chart from chart_skill result.
+     * Returns a controller object with dispose() method for cleanup.
+     */
+    renderChart(options: ChartRendererOptions): {
+        dispose: () => void;
+        setChartType: (type: ChartType) => void;
+    };
     /**
      * Update cache after a skill execution. Called automatically by _parseSSEStream.
      */

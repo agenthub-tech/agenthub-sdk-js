@@ -708,6 +708,130 @@ export class WebAASDK {
             this._builtinCallbacks.onChartResult = options.onChartResult;
         }
     }
+    // ── Chart Rendering ─────────────────────────────────────────────────────────
+    /**
+     * Render a chart from chart_skill result.
+     * Returns a controller object with dispose() method for cleanup.
+     */
+    renderChart(options) {
+        const { container, chartData, width, height, showTypeSwitcher = true, primaryColor = '#1890ff', onChartTypeChange } = options;
+        // Get container element
+        const containerEl = typeof container === 'string' ? document.querySelector(container) : container;
+        if (!containerEl) {
+            throw new Error('Chart container not found');
+        }
+        // Create wrapper
+        const wrapper = document.createElement('div');
+        wrapper.setAttribute('data-aa-sdk', 'true');
+        wrapper.style.cssText = 'margin-top: 12px;';
+        // Create chart container
+        const chartContainer = document.createElement('div');
+        chartContainer.setAttribute('data-aa-sdk', 'true');
+        chartContainer.style.cssText = `
+      width: ${width ?? '100%'};
+      height: ${typeof height === 'number' ? `${height}px` : (height ?? '280px')};
+      background: #fafafa;
+      border-radius: 8px;
+    `;
+        wrapper.appendChild(chartContainer);
+        // Create switcher if multiple chart types available
+        let switcherEl = null;
+        let currentType = chartData.chart_type;
+        if (showTypeSwitcher && chartData.available_chart_types.length > 1) {
+            switcherEl = document.createElement('div');
+            switcherEl.setAttribute('data-aa-sdk', 'true');
+            switcherEl.style.cssText = 'margin-top: 8px; text-align: center; display: flex; justify-content: center; gap: 8px;';
+            const chartTypeLabels = {
+                'bar': '柱状图',
+                'line': '折线图',
+                'pie': '饼图',
+                'bar-horizontal': '条形图',
+            };
+            for (const type of chartData.available_chart_types) {
+                const btn = document.createElement('button');
+                btn.setAttribute('data-aa-sdk', 'true');
+                btn.textContent = chartTypeLabels[type] ?? type;
+                btn.style.cssText = `
+          padding: 4px 12px;
+          border-radius: 6px;
+          border: ${type === currentType ? 'none' : '1px solid #d9d9d9'};
+          background: ${type === currentType ? primaryColor : '#fff'};
+          color: ${type === currentType ? '#fff' : '#333'};
+          font-size: 12px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        `;
+                btn.addEventListener('click', () => {
+                    if (type === currentType)
+                        return;
+                    currentType = type;
+                    // Update button styles
+                    switcherEl?.querySelectorAll('button').forEach((b, i) => {
+                        const btnType = chartData.available_chart_types[i];
+                        if (btnType === type) {
+                            b.style.border = 'none';
+                            b.style.background = primaryColor;
+                            b.style.color = '#fff';
+                        }
+                        else {
+                            b.style.border = '1px solid #d9d9d9';
+                            b.style.background = '#fff';
+                            b.style.color = '#333';
+                        }
+                    });
+                    // Update chart
+                    const newOption = chartData.echarts_options[type];
+                    if (newOption && chartInstance) {
+                        chartInstance.setOption(newOption, true);
+                    }
+                    onChartTypeChange?.(type);
+                });
+                switcherEl.appendChild(btn);
+            }
+            wrapper.appendChild(switcherEl);
+        }
+        containerEl.appendChild(wrapper);
+        // Dynamically load echarts and render
+        let chartInstance = null;
+        let disposed = false;
+        const loadAndRender = async () => {
+            if (disposed)
+                return;
+            try {
+                // Dynamic import echarts
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const echarts = await import('echarts');
+                if (disposed)
+                    return;
+                chartInstance = echarts.init(chartContainer, undefined, { renderer: 'canvas' });
+                chartInstance.setOption(chartData.echarts_option);
+            }
+            catch (err) {
+                console.error('[WebAA SDK] Failed to load echarts:', err);
+                chartContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#999;">图表加载失败</div>';
+            }
+        };
+        loadAndRender();
+        // Return controller
+        return {
+            dispose: () => {
+                disposed = true;
+                if (chartInstance && typeof chartInstance.dispose === 'function') {
+                    chartInstance.dispose();
+                }
+                wrapper.remove();
+            },
+            setChartType: (type) => {
+                if (disposed || !chartInstance)
+                    return;
+                currentType = type;
+                const newOption = chartData.echarts_options[type];
+                if (newOption) {
+                    chartInstance.setOption(newOption, true);
+                }
+            },
+        };
+    }
     // ── L1 SDK Auto Cache ──
     /**
      * Update cache after a skill execution. Called automatically by _parseSSEStream.
