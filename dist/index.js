@@ -44,7 +44,8 @@ export class WebAASDK {
         this._onResetCallbacks = [];
         // L1 SDK Auto Cache
         this._skillCache = new Map();
-        this._invalidateListeners = [];
+        // Built-in skill callbacks
+        this._builtinCallbacks = {};
     }
     // ── Debug Logging ──
     _log(format, ...args) {
@@ -148,6 +149,16 @@ export class WebAASDK {
         if (options.user) {
             await this.identify(options.user);
             this._log('user identified | userId=%s', options.user.userId);
+        }
+        // 5. Register built-in skill handlers if enabled
+        const enableBuiltin = options.enableBuiltinSkills !== false; // default true
+        if (enableBuiltin) {
+            this._registerBuiltinSkillHandlers(options);
+            this._log('builtin skill handlers registered');
+        }
+        // Store callbacks for chart/dialog events
+        if (options.onChartResult) {
+            this._builtinCallbacks.onChartResult = options.onChartResult;
         }
         this._log('init complete');
     }
@@ -362,6 +373,22 @@ export class WebAASDK {
                             continue;
                         emitter.emit(event.type, event);
                         emitter.emit('event', event);
+                        // Handle built-in skill results (chart_skill is backend-executed)
+                        if (event.type === 'ToolCallEnd') {
+                            const toolName = event.payload?.tool_name;
+                            const result = event.payload?.result;
+                            // chart_skill result handling
+                            if (toolName === 'chart_skill' && result?.success && result.echarts_options) {
+                                if (this._builtinCallbacks.onChartResult) {
+                                    try {
+                                        this._builtinCallbacks.onChartResult(result);
+                                    }
+                                    catch (e) {
+                                        this._log('onChartResult callback error: %s', e instanceof Error ? e.message : String(e));
+                                    }
+                                }
+                            }
+                        }
                         if (event.type === 'RunFinished') {
                             this._log('event RunFinished');
                             receivedFinish = true;
@@ -620,6 +647,66 @@ export class WebAASDK {
      */
     onReset(callback) {
         this._onResetCallbacks.push(callback);
+    }
+    // ── Built-in Skill Handlers ─────────────────────────────────────────────────
+    /**
+     * Set callbacks for built-in skill events (chart, dialog).
+     */
+    setBuiltinCallbacks(callbacks) {
+        this._builtinCallbacks = { ...this._builtinCallbacks, ...callbacks };
+    }
+    /**
+     * Register built-in skill handlers for chart_skill and dialog_skill.
+     * Called automatically during init() when enableBuiltinSkills is true.
+     */
+    _registerBuiltinSkillHandlers(options) {
+        // chart_skill is backend-executed, so we don't register a local handler.
+        // The result is handled via ToolCallEnd event in _parseSSEStream.
+        // dialog_skill is SDK-executed, register local handler
+        this.registerLocalSkill('dialog_skill', async (params) => {
+            const action = params.action;
+            const msg = params.message;
+            // Use custom callbacks if provided
+            if (action === 'confirm') {
+                if (this._builtinCallbacks.onDialogConfirm) {
+                    const confirmed = await this._builtinCallbacks.onDialogConfirm(msg);
+                    return { action: 'confirm', message: msg, confirmed };
+                }
+                // Fallback to browser native
+                const confirmed = typeof window !== 'undefined' && window.confirm ? window.confirm(msg) : false;
+                return { action: 'confirm', message: msg, confirmed };
+            }
+            else if (action === 'input') {
+                const placeholder = params.placeholder ?? '';
+                const inputType = params.input_type ?? 'text';
+                if (this._builtinCallbacks.onDialogInput) {
+                    const value = await this._builtinCallbacks.onDialogInput(msg, placeholder, inputType);
+                    return { action: 'input', message: msg, value };
+                }
+                // Fallback to browser native
+                const value = typeof window !== 'undefined' && window.prompt
+                    ? (window.prompt(msg + (placeholder ? ` (${placeholder})` : '')) ?? '')
+                    : '';
+                return { action: 'input', message: msg, value };
+            }
+            else if (action === 'notify') {
+                if (this._builtinCallbacks.onDialogNotify) {
+                    await this._builtinCallbacks.onDialogNotify(msg);
+                }
+                return { action: 'notify', message: msg, success: true };
+            }
+            else if (action === 'error') {
+                if (this._builtinCallbacks.onDialogError) {
+                    await this._builtinCallbacks.onDialogError(msg);
+                }
+                return { action: 'error', message: msg, error_shown: true };
+            }
+            return { success: false, error: `Unknown action: ${action}` };
+        });
+        // Store chart callback for ToolCallEnd handling
+        if (options.onChartResult) {
+            this._builtinCallbacks.onChartResult = options.onChartResult;
+        }
     }
     // ── L1 SDK Auto Cache ──
     /**

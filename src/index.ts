@@ -51,6 +51,64 @@ export interface InitOptions {
   retryDelay?: number;        // default 1000 (ms)
   heartbeatTimeout?: number;  // default 45000 (ms)
   debug?: boolean;            // default false
+  /** Enable built-in skill handlers (chart_skill, dialog_skill). Default: true */
+  enableBuiltinSkills?: boolean;
+  /** Callback when chart_skill result is received (backend execution) */
+  onChartResult?: (result: ChartSkillResult) => void;
+  /** Custom dialog handler. If not provided, uses browser native confirm/prompt */
+  dialogHandler?: DialogHandler;
+}
+
+/** Builtin skill event handlers - callbacks for UI updates */
+export interface BuiltinSkillCallbacks {
+  /** Called when chart_skill result is received (backend execution) */
+  onChartResult?: (result: ChartSkillResult) => void;
+  /** Called when dialog_skill needs confirmation - return true for confirm, false for cancel */
+  onDialogConfirm?: (message: string) => Promise<boolean>;
+  /** Called when dialog_skill needs user input - return the input value */
+  onDialogInput?: (message: string, placeholder?: string, inputType?: 'text' | 'password') => Promise<string>;
+  /** Called when dialog_skill shows notification */
+  onDialogNotify?: (message: string) => Promise<void>;
+  /** Called when dialog_skill shows error */
+  onDialogError?: (message: string) => Promise<void>;
+}
+
+/** Chart skill result from backend */
+export interface ChartSkillResult {
+  success: boolean;
+  chart_type: ChartType;
+  echarts_option: EChartsOption;
+  available_chart_types: ChartType[];
+  echarts_options: Record<ChartType, EChartsOption>;
+  data_summary?: {
+    row_count: number;
+    chart_type: string;
+    title?: string;
+  };
+  error?: string;
+}
+
+/** Chart types supported by chart_skill */
+export type ChartType = 'pie' | 'line' | 'bar' | 'bar-horizontal';
+
+/** ECharts option type (simplified) */
+export interface EChartsOption {
+  title?: Record<string, unknown>;
+  tooltip?: Record<string, unknown>;
+  grid?: Record<string, unknown>;
+  xAxis?: Record<string, unknown>;
+  yAxis?: Record<string, unknown>;
+  series?: Array<Record<string, unknown>>;
+  legend?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** Dialog handler for dialog_skill */
+export interface DialogHandler {
+  confirm?: (message: string) => Promise<boolean>;
+  input?: (message: string, placeholder?: string, inputType?: 'text' | 'password') => Promise<string>;
+  notify?: (message: string) => Promise<void>;
+  error?: (message: string) => Promise<void>;
 }
 
 export interface RunOptions {
@@ -127,7 +185,9 @@ export class WebAASDK {
     timestamp: number;
     policy: SkillCachePolicy;
   }> = new Map();
-  private _invalidateListeners: Array<() => void> = [];
+
+  // Built-in skill callbacks
+  private _builtinCallbacks: BuiltinSkillCallbacks = {};
 
   // ── Debug Logging ──
 
@@ -243,6 +303,18 @@ export class WebAASDK {
     if (options.user) {
       await this.identify(options.user);
       this._log('user identified | userId=%s', options.user.userId);
+    }
+
+    // 5. Register built-in skill handlers if enabled
+    const enableBuiltin = options.enableBuiltinSkills !== false; // default true
+    if (enableBuiltin) {
+      this._registerBuiltinSkillHandlers(options);
+      this._log('builtin skill handlers registered');
+    }
+
+    // Store callbacks for chart/dialog events
+    if (options.onChartResult) {
+      this._builtinCallbacks.onChartResult = options.onChartResult;
     }
 
     this._log('init complete');
@@ -465,6 +537,23 @@ export class WebAASDK {
 
             emitter.emit(event.type, event);
             emitter.emit('event', event);
+
+            // Handle built-in skill results (chart_skill is backend-executed)
+            if (event.type === 'ToolCallEnd') {
+              const toolName = event.payload?.tool_name as string;
+              const result = event.payload?.result as Record<string, unknown> | undefined;
+
+              // chart_skill result handling
+              if (toolName === 'chart_skill' && result?.success && result.echarts_options) {
+                if (this._builtinCallbacks.onChartResult) {
+                  try {
+                    this._builtinCallbacks.onChartResult(result as unknown as ChartSkillResult);
+                  } catch (e) {
+                    this._log('onChartResult callback error: %s', e instanceof Error ? e.message : String(e));
+                  }
+                }
+              }
+            }
 
             if (event.type === 'RunFinished') {
               this._log('event RunFinished');
@@ -738,6 +827,70 @@ export class WebAASDK {
    */
   onReset(callback: () => void): void {
     this._onResetCallbacks.push(callback);
+  }
+
+  // ── Built-in Skill Handlers ─────────────────────────────────────────────────
+
+  /**
+   * Set callbacks for built-in skill events (chart, dialog).
+   */
+  setBuiltinCallbacks(callbacks: BuiltinSkillCallbacks): void {
+    this._builtinCallbacks = { ...this._builtinCallbacks, ...callbacks };
+  }
+
+  /**
+   * Register built-in skill handlers for chart_skill and dialog_skill.
+   * Called automatically during init() when enableBuiltinSkills is true.
+   */
+  private _registerBuiltinSkillHandlers(options: InitOptions): void {
+    // chart_skill is backend-executed, so we don't register a local handler.
+    // The result is handled via ToolCallEnd event in _parseSSEStream.
+
+    // dialog_skill is SDK-executed, register local handler
+    this.registerLocalSkill('dialog_skill', async (params) => {
+      const action = params.action as string;
+      const msg = params.message as string;
+
+      // Use custom callbacks if provided
+      if (action === 'confirm') {
+        if (this._builtinCallbacks.onDialogConfirm) {
+          const confirmed = await this._builtinCallbacks.onDialogConfirm(msg);
+          return { action: 'confirm', message: msg, confirmed };
+        }
+        // Fallback to browser native
+        const confirmed = typeof window !== 'undefined' && window.confirm ? window.confirm(msg) : false;
+        return { action: 'confirm', message: msg, confirmed };
+      } else if (action === 'input') {
+        const placeholder = (params.placeholder as string) ?? '';
+        const inputType = (params.input_type as 'text' | 'password') ?? 'text';
+        if (this._builtinCallbacks.onDialogInput) {
+          const value = await this._builtinCallbacks.onDialogInput(msg, placeholder, inputType);
+          return { action: 'input', message: msg, value };
+        }
+        // Fallback to browser native
+        const value = typeof window !== 'undefined' && window.prompt
+          ? (window.prompt(msg + (placeholder ? ` (${placeholder})` : '')) ?? '')
+          : '';
+        return { action: 'input', message: msg, value };
+      } else if (action === 'notify') {
+        if (this._builtinCallbacks.onDialogNotify) {
+          await this._builtinCallbacks.onDialogNotify(msg);
+        }
+        return { action: 'notify', message: msg, success: true };
+      } else if (action === 'error') {
+        if (this._builtinCallbacks.onDialogError) {
+          await this._builtinCallbacks.onDialogError(msg);
+        }
+        return { action: 'error', message: msg, error_shown: true };
+      }
+
+      return { success: false, error: `Unknown action: ${action}` };
+    });
+
+    // Store chart callback for ToolCallEnd handling
+    if (options.onChartResult) {
+      this._builtinCallbacks.onChartResult = options.onChartResult;
+    }
   }
 
   // ── L1 SDK Auto Cache ──
