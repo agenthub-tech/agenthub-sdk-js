@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { WebAASDK, SkillDefinition, InitOptions, AGUIEvent } from './index';
+import { AgentHubSDK, WebAASDK, SkillDefinition, InitOptions, AGUIEvent } from './index';
 
 // ── Helpers ──
 
@@ -91,6 +91,23 @@ describe('WebAASDK.init', () => {
       prompt_injection: 'scan first',
       execution_mode: 'sdk',
     });
+  });
+
+  it('should include nonSummaryResultFields in register payload when provided', async () => {
+    const fetchMock = mockFetchSuccess();
+    globalThis.fetch = fetchMock;
+
+    const sdk = new WebAASDK();
+    const skill = makeSkill({ nonSummaryResultFields: ['object_id', 'files[*].path'] });
+
+    await sdk.init({
+      channelKey: 'key-abc',
+      skills: [skill],
+      apiBase: 'https://api.example.com',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
+    expect(body.skills[0].non_summary_result_fields).toEqual(['object_id', 'files[*].path']);
   });
 
   it('should NOT include execute function in the register payload', async () => {
@@ -257,6 +274,14 @@ describe('WebAASDK.init', () => {
 
     const [url] = fetchMock.mock.calls[2]; // register call (index 2)
     expect(url).toBe('/api/sdk/register');
+  });
+});
+
+describe('AgentHubSDK alias', () => {
+  it('should expose AgentHubSDK as a backward-compatible WebAASDK subclass', () => {
+    const sdk = new AgentHubSDK();
+    expect(sdk).toBeInstanceOf(AgentHubSDK);
+    expect(sdk).toBeInstanceOf(WebAASDK);
   });
 });
 

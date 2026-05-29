@@ -26,6 +26,7 @@ export interface SkillDefinition {
         path: string;
         ttl?: number;
     }>;
+    nonSummaryResultFields?: string[];
 }
 export interface UserIdentity {
     userId: string;

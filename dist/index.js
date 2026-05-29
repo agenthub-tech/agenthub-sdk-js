@@ -5,7 +5,7 @@
 // 2. UI Components - React/Vue components for custom UI (import from 'agenthub-sdk/react')
 // 3. Complete Widget - One-line integration
 // Core SDK - headless (no React dependency)
-export { WebAASDK } from './core/sdk';
+export { AgentHubSDK, WebAASDK } from './core/sdk';
 export * from './core/types';
 // React components are NOT exported from main entry to avoid bundling React
 // Import from 'agenthub-sdk/react' if you need them

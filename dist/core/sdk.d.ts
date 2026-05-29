@@ -89,4 +89,10 @@ export declare class WebAASDK {
     get apiBase(): string;
     get channelConfig(): ChannelConfig | null;
 }
+/**
+ * Preferred public SDK name. Kept as a thin subclass for backward compatibility
+ * with existing WebAASDK integrations.
+ */
+export declare class AgentHubSDK extends WebAASDK {
+}
 //# sourceMappingURL=sdk.d.ts.map

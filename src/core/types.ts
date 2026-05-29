@@ -32,6 +32,7 @@ export interface SkillDefinition {
   execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   cache?: SkillCachePolicy;
   resultCacheFields?: Array<{ path: string; ttl?: number }>;
+  nonSummaryResultFields?: string[];
 }
 
 export interface UserIdentity {

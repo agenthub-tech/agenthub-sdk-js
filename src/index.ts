@@ -6,7 +6,7 @@
 // 3. Complete Widget - One-line integration
 
 // Core SDK - headless (no React dependency)
-export { WebAASDK } from './core/sdk';
+export { AgentHubSDK, WebAASDK } from './core/sdk';
 export * from './core/types';
 
 // React components are NOT exported from main entry to avoid bundling React

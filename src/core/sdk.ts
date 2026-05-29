@@ -150,12 +150,13 @@ export class WebAASDK {
 
     // 3. Register skills with backend
     if (skills.length > 0) {
-      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode, resultCacheFields }) => ({
+      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode, resultCacheFields, nonSummaryResultFields }) => ({
         name,
         schema,
         prompt_injection: promptInjection ?? null,
         execution_mode: executionMode,
         ...(resultCacheFields ? { result_cache_fields: resultCacheFields } : {}),
+        ...(nonSummaryResultFields ? { non_summary_result_fields: nonSummaryResultFields } : {}),
       }));
 
       const response = await fetch(`${this._apiBase}/api/sdk/register`, {
@@ -777,3 +778,9 @@ export class WebAASDK {
   get apiBase(): string { return this._apiBase; }
   get channelConfig(): ChannelConfig | null { return this._channelConfig; }
 }
+
+/**
+ * Preferred public SDK name. Kept as a thin subclass for backward compatibility
+ * with existing WebAASDK integrations.
+ */
+export class AgentHubSDK extends WebAASDK {}
