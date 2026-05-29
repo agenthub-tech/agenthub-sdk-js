@@ -360,6 +360,25 @@ describe('WebAASDK.run', () => {
     expect(body.tool_result).toEqual({ result: 'ok' });
   });
 
+  it('should include reasoning in payload when provided', async () => {
+    const sseFetch = mockFetchSSE([
+      sseEvent('RunStarted', { run_id: 's-3' }),
+      sseEvent('RunFinished', {}),
+    ]);
+
+    const sdk = new WebAASDK();
+    await initSDK(sdk, sseFetch);
+
+    const emitter = sdk.run({
+      userInput: 'hello',
+      reasoning: { mode: 'on' },
+    });
+    await collectEvents(emitter);
+
+    const body = JSON.parse(sseFetch.mock.calls[0][1].body);
+    expect(body.reasoning).toEqual({ mode: 'on' });
+  });
+
   it('should return an EventEmitter immediately', async () => {
     const sseFetch = mockFetchSSE([sseEvent('RunFinished', {})]);
     const sdk = new WebAASDK();
@@ -657,7 +676,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
       });
     }) as typeof globalThis.fetch;
 
-    const events = await collectEvents(sdk.run({ userInput: 'click button' }));
+    const events = await collectEvents(sdk.run({ userInput: 'click button', reasoning: { mode: 'on' } }));
 
     // Skill execute was called with correct params
     expect(executeFn).toHaveBeenCalledOnce();
@@ -672,6 +691,7 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
       tool_call_id: 'tc-1',
       result: { clicked: true },
     });
+    expect(secondCallBody.reasoning).toEqual({ mode: 'on' });
 
     // Events from both the first and follow-up streams are piped to the same emitter
     const types = events.map((e) => e.type);

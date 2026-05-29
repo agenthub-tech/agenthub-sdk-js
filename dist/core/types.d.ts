@@ -44,12 +44,16 @@ export interface InitOptions {
     heartbeatTimeout?: number;
     debug?: boolean;
 }
+export interface ReasoningOptions {
+    mode?: 'default' | 'on' | 'off';
+}
 export interface RunOptions {
     userInput: string;
     context?: Record<string, unknown>;
     threadId?: string;
     runId?: string;
     toolResult?: Record<string, unknown>;
+    reasoning?: ReasoningOptions;
     files?: File[];
 }
 export interface AGUIEvent {
