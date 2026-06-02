@@ -10,6 +10,8 @@ function makeSkill(overrides: Partial<SkillDefinition> = {}): SkillDefinition {
     promptInjection: overrides.promptInjection,
     executionMode: overrides.executionMode ?? 'sdk',
     execute: overrides.execute ?? (async () => ({ ok: true })),
+    ...(overrides.resultCacheFields ? { resultCacheFields: overrides.resultCacheFields } : {}),
+    ...(overrides.nonSummaryResultFields ? { nonSummaryResultFields: overrides.nonSummaryResultFields } : {}),
   };
 }
 
@@ -78,8 +80,8 @@ describe('WebAASDK.init', () => {
     const [url, options] = fetchMock.mock.calls[2];
     expect(url).toBe('https://api.example.com/api/sdk/register');
     expect(options.method).toBe('POST');
-    expect(options.headers['Content-Type']).toBe('application/json');
-    expect(options.headers['Authorization']).toBe('Bearer test-token-abc');
+    expect(new Headers(options.headers).get('Content-Type')).toBe('application/json');
+    expect(new Headers(options.headers).get('Authorization')).toBe('Bearer test-token-abc');
 
     const body = JSON.parse(options.body);
     expect(body).not.toHaveProperty('channel_key');
@@ -282,6 +284,184 @@ describe('AgentHubSDK alias', () => {
     const sdk = new AgentHubSDK();
     expect(sdk).toBeInstanceOf(AgentHubSDK);
     expect(sdk).toBeInstanceOf(WebAASDK);
+  });
+});
+
+describe('WebAASDK auth refresh', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('should refresh token and retry identify on 401', async () => {
+    const sdk = new WebAASDK();
+    await initSDK(sdk);
+
+    let identifyCalls = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+      if (url.includes('/api/auth/token')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'refreshed-token', expires_in: 7200 }),
+        });
+      }
+      if (url.includes('/api/sdk/identify')) {
+        identifyCalls++;
+        if (identifyCalls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            statusText: 'Unauthorized',
+            json: async () => ({ detail: 'Token expired or invalid' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await sdk.identify({ userId: 'u-1', name: 'Alice' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(sdk.accessToken).toBe('refreshed-token');
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer test-token-abc');
+    expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Authorization')).toBe('Bearer refreshed-token');
+  });
+
+  it('should refresh token and retry createThread on 401', async () => {
+    const sdk = new WebAASDK();
+    await initSDK(sdk);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    }) as typeof globalThis.fetch;
+    await sdk.identify({ userId: 'u-1' });
+
+    let createCalls = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/auth/token')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'thread-token', expires_in: 7200 }),
+        });
+      }
+      if (url.includes('/api/sdk/threads')) {
+        createCalls++;
+        if (createCalls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            statusText: 'Unauthorized',
+            json: async () => ({ detail: 'Token expired or invalid' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'thread-1' }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await expect(sdk.createThread('My Thread')).resolves.toEqual({ id: 'thread-1' });
+    expect(sdk.accessToken).toBe('thread-token');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('should refresh token and retry switchThread on 401', async () => {
+    const sdk = new WebAASDK();
+    await initSDK(sdk);
+
+    let switchCalls = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/auth/token')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'switch-token', expires_in: 7200 }),
+        });
+      }
+      if (url.includes('/api/sdk/threads/thread-42')) {
+        switchCalls++;
+        if (switchCalls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            statusText: 'Unauthorized',
+            json: async () => ({ detail: 'Token expired or invalid' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'thread-42', messages: [] }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await expect(sdk.switchThread('thread-42')).resolves.toEqual({ id: 'thread-42', messages: [] });
+    expect(sdk.accessToken).toBe('switch-token');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('should refresh token and retry listThreads on 401', async () => {
+    const sdk = new WebAASDK();
+    await initSDK(sdk);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    }) as typeof globalThis.fetch;
+    await sdk.identify({ userId: 'u-1' });
+
+    let listCalls = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/auth/token')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'list-token', expires_in: 7200 }),
+        });
+      }
+      if (url.includes('/api/sdk/threads?')) {
+        listCalls++;
+        if (listCalls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 401,
+            statusText: 'Unauthorized',
+            json: async () => ({ detail: 'Token expired or invalid' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ([{ id: 't-1' }]),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await expect(sdk.listThreads()).resolves.toEqual([{ id: 't-1' }]);
+    expect(sdk.accessToken).toBe('list-token');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -709,14 +889,15 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
 
     // Follow-up run was called with tool_result and run_id
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const secondCallBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(secondCallBody.run_id).toBe('sess-1');
-    expect(secondCallBody.tool_result).toEqual({
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe('https://api.test/api/auth/token');
+    const thirdCallBody = JSON.parse(fetchMock.mock.calls[2][1].body);
+    expect(thirdCallBody.run_id).toBe('sess-1');
+    expect(thirdCallBody.tool_result).toEqual({
       tool_call_id: 'tc-1',
       result: { clicked: true },
     });
-    expect(secondCallBody.reasoning).toEqual({ mode: 'on' });
+    expect(thirdCallBody.reasoning).toEqual({ mode: 'on' });
 
     // Events from both the first and follow-up streams are piped to the same emitter
     const types = events.map((e) => e.type);
@@ -759,9 +940,10 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
     const events = await collectEvents(sdk.run({ userInput: 'do something' }));
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const secondCallBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(secondCallBody.tool_result).toEqual({
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe('https://api.test/api/auth/token');
+    const thirdCallBody = JSON.parse(fetchMock.mock.calls[2][1].body);
+    expect(thirdCallBody.tool_result).toEqual({
       tool_call_id: 'tc-2',
       result: { error: "Skill 'unknown_skill' not registered locally" },
     });
@@ -805,8 +987,10 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
     const events = await collectEvents(sdk.run({ userInput: 'click' }));
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    const secondCallBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(secondCallBody.tool_result).toEqual({
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe('https://api.test/api/auth/token');
+    const thirdCallBody = JSON.parse(fetchMock.mock.calls[2][1].body);
+    expect(thirdCallBody.tool_result).toEqual({
       tool_call_id: 'tc-3',
       result: { error: 'DOM element not found' },
     });
@@ -849,8 +1033,10 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
     await collectEvents(sdk.run({ userInput: 'scan' }));
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    const secondCallBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(secondCallBody.run_id).toBe('my-session-xyz');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe('https://api.test/api/auth/token');
+    const thirdCallBody = JSON.parse(fetchMock.mock.calls[2][1].body);
+    expect(thirdCallBody.run_id).toBe('my-session-xyz');
   });
 
   it('should pipe follow-up run events to the same emitter (transparent dispatch)', async () => {

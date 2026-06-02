@@ -28,6 +28,8 @@ export declare class WebAASDK {
      * Acquire an access token by exchanging the channel_key at POST /api/auth/token.
      */
     private _acquireToken;
+    private _readErrorMessage;
+    private _fetchWithAuthRetry;
     /**
      * Fetch channel configuration from GET /api/config.
      */

@@ -105,14 +105,42 @@ export class WebAASDK {
     this._accessToken = data.access_token;
   }
 
+  private async _readErrorMessage(response: Response): Promise<string> {
+    const body = await response.json().catch(() => ({ detail: response.statusText }));
+    return body.detail ?? body.message ?? response.statusText;
+  }
+
+  private async _fetchWithAuthRetry(
+    input: string,
+    init: RequestInit = {},
+    isRetryAfterRefresh = false,
+  ): Promise<Response> {
+    if (!this._accessToken) {
+      throw new Error('SDK not initialized');
+    }
+
+    const headers = new Headers(init.headers ?? {});
+    headers.set('Authorization', `Bearer ${this._accessToken}`);
+
+    const response = await fetch(input, {
+      ...init,
+      headers,
+    });
+
+    if (response.status === 401 && !isRetryAfterRefresh) {
+      await this._acquireToken();
+      return this._fetchWithAuthRetry(input, init, true);
+    }
+
+    return response;
+  }
+
   /**
    * Fetch channel configuration from GET /api/config.
    */
   private async _fetchChannelConfig(): Promise<ChannelConfig | null> {
     try {
-      const response = await fetch(`${this._apiBase}/api/config`, {
-        headers: { 'Authorization': `Bearer ${this._accessToken}` },
-      });
+      const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/config`);
       if (!response.ok) return null;
       return await response.json();
     } catch {
@@ -159,11 +187,10 @@ export class WebAASDK {
         ...(nonSummaryResultFields ? { non_summary_result_fields: nonSummaryResultFields } : {}),
       }));
 
-      const response = await fetch(`${this._apiBase}/api/sdk/register`, {
+      const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this._accessToken}`,
         },
         body: JSON.stringify({
           skills: skillsMeta,
@@ -172,8 +199,7 @@ export class WebAASDK {
       });
 
       if (!response.ok) {
-        const body = await response.json().catch(() => ({ detail: response.statusText }));
-        const message = body.detail ?? body.message ?? response.statusText;
+        const message = await this._readErrorMessage(response);
         throw new Error(`Register failed (${response.status}): ${message}`);
       }
 
@@ -509,11 +535,10 @@ export class WebAASDK {
     this._userId = user.userId;
     if (!this._accessToken) return;
 
-    const response = await fetch(`${this._apiBase}/api/sdk/identify`, {
+    const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/identify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this._accessToken}`,
       },
       body: JSON.stringify({
         user_id: user.userId,
@@ -524,8 +549,8 @@ export class WebAASDK {
     });
 
     if (!response.ok) {
-      const body = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`Identify failed (${response.status}): ${body.detail ?? response.statusText}`);
+      const message = await this._readErrorMessage(response);
+      throw new Error(`Identify failed (${response.status}): ${message}`);
     }
 
     for (const cb of this._onIdentifyCallbacks) {
@@ -541,18 +566,17 @@ export class WebAASDK {
     if (!this._userId) throw new Error('Call identify() before creating threads');
     if (!this._accessToken) throw new Error('SDK not initialized');
 
-    const response = await fetch(`${this._apiBase}/api/sdk/threads`, {
+    const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/threads`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this._accessToken}`,
       },
       body: JSON.stringify({ user_id: this._userId, title: title ?? null }),
     });
 
     if (!response.ok) {
-      const body = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`Create thread failed: ${body.detail ?? response.statusText}`);
+      const message = await this._readErrorMessage(response);
+      throw new Error(`Create thread failed: ${message}`);
     }
 
     const data = await response.json();
@@ -581,13 +605,11 @@ export class WebAASDK {
     this._runId = null;
     this._threadId = threadId;
 
-    const response = await fetch(`${this._apiBase}/api/sdk/threads/${encodeURIComponent(threadId)}`, {
-      headers: { 'Authorization': `Bearer ${this._accessToken}` },
-    });
+    const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/threads/${encodeURIComponent(threadId)}`);
 
     if (!response.ok) {
-      const body = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(`Switch thread failed: ${body.detail ?? response.statusText}`);
+      const message = await this._readErrorMessage(response);
+      throw new Error(`Switch thread failed: ${message}`);
     }
 
     return response.json();
@@ -602,9 +624,7 @@ export class WebAASDK {
       offset: String(offset),
     });
 
-    const response = await fetch(`${this._apiBase}/api/sdk/threads?${params}`, {
-      headers: { 'Authorization': `Bearer ${this._accessToken}` },
-    });
+    const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/threads?${params}`);
 
     if (!response.ok) return [];
     return response.json();
