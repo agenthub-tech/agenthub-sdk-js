@@ -22,11 +22,44 @@ const DEFAULT_THEME: ChatWidgetTheme = {
   welcomeMessage: '你好，有什么可以帮助你的？',
 };
 
+function AttachmentIcon({ size = 16 }: { size?: number }): JSX.Element {
+  return (
+    <svg viewBox="0 0 1024 1024" width={size} height={size} aria-hidden="true">
+      <path
+        d="M516.373333 375.978667l136.576-136.576a147.797333 147.797333 0 0 1 208.853334-0.021334 147.690667 147.690667 0 0 1-0.042667 208.832l-204.8 204.778667v0.021333l-153.621333 153.6c-85.973333 85.973333-225.28 85.973333-311.253334 0.021334-85.994667-85.973333-85.973333-225.216 0.149334-311.36L431.146667 256.362667a21.333333 21.333333 0 0 0-30.165334-30.165334L162.069333 465.066667c-102.805333 102.826667-102.826667 269.056-0.149333 371.733333 102.613333 102.613333 268.970667 102.613333 371.584 0l153.6-153.642667h0.021333l0.021334-0.021333 204.778666-204.778667c74.325333-74.325333 74.346667-194.858667 0.021334-269.184-74.24-74.24-194.88-74.24-269.162667 0.042667l-136.576 136.554667-187.626667 187.626666a117.845333 117.845333 0 0 0-0.106666 166.826667 118.037333 118.037333 0 0 0 166.826666-0.106667l255.850667-255.829333a21.333333 21.333333 0 0 0-30.165333-30.165333L435.136 669.973333a75.370667 75.370667 0 0 1-106.496 0.106667 75.178667 75.178667 0 0 1 0.128-106.496l187.605333-187.605333z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+type ChannelUITheme = {
+  chat_panel?: {
+    primary_color?: string;
+    font_family?: string;
+    welcome_message?: string | null;
+  };
+};
+
+function resolveThemeFromChannelConfig(uiTheme: unknown): Partial<ChatWidgetTheme> {
+  if (!uiTheme || typeof uiTheme !== 'object') return {};
+  const chatPanel = (uiTheme as ChannelUITheme).chat_panel;
+  if (!chatPanel || typeof chatPanel !== 'object') return {};
+
+  return {
+    primaryColor: chatPanel.primary_color,
+    fontFamily: chatPanel.font_family,
+    welcomeMessage: chatPanel.welcome_message ?? undefined,
+  };
+}
+
 export interface ChatWidgetProps extends ChatWidgetConfig {
   /** Container style */
   style?: React.CSSProperties;
   /** Container className */
   className?: string;
+  /** Show thread list and switching UI when an explicit user is identified */
+  enableThreadList?: boolean;
 }
 
 export function ChatWidget({
@@ -40,9 +73,11 @@ export function ChatWidget({
   onError,
   style,
   className,
+  enableThreadList = false,
 }: ChatWidgetProps): JSX.Element {
-  const mergedTheme = { ...DEFAULT_THEME, ...theme };
-  const { primaryColor, fontFamily, placeholder, welcomeMessage } = mergedTheme;
+  const [resolvedTheme, setResolvedTheme] = useState<ChatWidgetTheme>({ ...DEFAULT_THEME, ...theme });
+  const { primaryColor, fontFamily, placeholder, welcomeMessage } = resolvedTheme;
+  const threadListEnabled = enableThreadList && Boolean(user?.userId);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -50,12 +85,87 @@ export function ChatWidget({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [threads, setThreads] = useState<Array<{ id: string; title: string | null; updatedAt: string | null }>>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadError, setThreadError] = useState<string | null>(null);
 
   const sdkRef = useRef<WebAASDK | null>(null);
   const emitterRef = useRef<{ on: (event: string, handler: (...args: any[]) => void) => void; removeAllListeners: () => void } | null>(null);
   const currentMsgIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  const renderThreadHistory = useCallback((threadData: Record<string, unknown>) => {
+    const historyMessages = ((threadData.messages ?? []) as Array<{ role?: string; content?: string }>)
+      .flatMap((msg, index) => {
+        if ((msg.role === 'user' || msg.role === 'assistant') && msg.content) {
+          return [{
+            id: `history_${index}_${msg.role}`,
+            role: msg.role,
+            content: msg.content,
+            state: 'done',
+          } satisfies Message];
+        }
+        return [];
+      });
+    setMessages(historyMessages);
+  }, []);
+
+  const refreshThreads = useCallback(async () => {
+    if (!threadListEnabled || !sdkRef.current) return;
+
+    setThreadsLoading(true);
+    try {
+      const items = await sdkRef.current.listThreads();
+      const normalized = items.map((item, index) => {
+        const record = item as Record<string, unknown>;
+        const id = typeof record.id === 'string' ? record.id : `thread_${index}`;
+        return {
+          id,
+          title: typeof record.title === 'string' ? record.title : null,
+          updatedAt: typeof record.updated_at === 'string' ? record.updated_at : null,
+        };
+      });
+      setThreads(normalized);
+      setActiveThreadId(sdkRef.current.threadId);
+    } finally {
+      setThreadsLoading(false);
+    }
+  }, [threadListEnabled]);
+
+  const handleSwitchThread = useCallback(async (threadId: string) => {
+    if (!sdkRef.current || !threadId || isStreaming) return;
+
+    setThreadError(null);
+    setPendingFiles([]);
+    setInputValue('');
+    setIsStreaming(false);
+    try {
+      const threadData = await sdkRef.current.switchThread(threadId);
+      setActiveThreadId(threadId);
+      renderThreadHistory(threadData);
+      await refreshThreads();
+    } catch (err) {
+      setThreadError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isStreaming, refreshThreads, renderThreadHistory]);
+
+  const handleNewThread = useCallback(async () => {
+    if (!sdkRef.current || isStreaming || !threadListEnabled) return;
+
+    setThreadError(null);
+    setPendingFiles([]);
+    setInputValue('');
+    setMessages([]);
+    try {
+      const threadId = await sdkRef.current.newThread();
+      setActiveThreadId(threadId);
+      await refreshThreads();
+    } catch (err) {
+      setThreadError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isStreaming, refreshThreads, threadListEnabled]);
 
   // Initialize SDK
   useEffect(() => {
@@ -79,6 +189,12 @@ export function ChatWidget({
           user,
         });
 
+        setResolvedTheme({
+          ...DEFAULT_THEME,
+          ...resolveThemeFromChannelConfig(sdk.channelConfig?.ui_theme),
+          ...theme,
+        });
+
         // Create temporary user if not provided
         if (!user) {
           let tempUserId = sessionStorage.getItem(`aa_temp_user_${channelKey}`);
@@ -90,6 +206,10 @@ export function ChatWidget({
         }
 
         setIsReady(true);
+        setActiveThreadId(sdk.threadId);
+        if (threadListEnabled) {
+          await refreshThreads();
+        }
         onReady?.();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -103,7 +223,7 @@ export function ChatWidget({
     return () => {
       sdkRef.current?.disconnect();
     };
-  }, [channelKey, apiBase, debug, user]);
+  }, [channelKey, apiBase, debug, user, theme, threadListEnabled, refreshThreads]);
 
   // Default dialog handler (shows React components)
   const handleDialog = async (params: DialogParams): Promise<DialogResult> => {
@@ -181,6 +301,13 @@ export function ChatWidget({
     emitterRef.current = emitter;
 
     // Handle events
+    emitter.on('RunStarted', (event: AGUIEvent) => {
+      const threadId = event.payload.thread_id as string | undefined;
+      if (threadId) {
+        setActiveThreadId(threadId);
+      }
+    });
+
     emitter.on('TextMessageDelta', (event: AGUIEvent) => {
       const delta = event.payload.delta as string;
       if (delta) {
@@ -212,6 +339,9 @@ export function ChatWidget({
           : m
       ));
       setIsStreaming(false);
+      if (threadListEnabled) {
+        refreshThreads();
+      }
     });
 
     emitter.on('Error', (event: AGUIEvent) => {
@@ -223,7 +353,7 @@ export function ChatWidget({
       ));
       setIsStreaming(false);
     });
-  }, [inputValue, pendingFiles, isReady]);
+  }, [inputValue, pendingFiles, isReady, refreshThreads, threadListEnabled]);
 
   // Stop
   const handleStop = useCallback(() => {
@@ -268,6 +398,74 @@ export function ChatWidget({
       fontFamily,
       ...style,
     }} className={className}>
+      {threadListEnabled && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 12px',
+          borderBottom: '1px solid #f3f4f6',
+          background: '#fff',
+        }}>
+          <select
+            value={activeThreadId ?? ''}
+            disabled={threadsLoading || isStreaming || !isReady}
+            onChange={(e) => {
+              if (e.target.value) {
+                handleSwitchThread(e.target.value);
+              }
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: 36,
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              padding: '0 12px',
+              background: '#fff',
+              color: '#111827',
+              fontFamily,
+            }}
+          >
+            <option value="">{threads.length ? '选择会话' : '当前会话'}</option>
+            {threads.map((thread, index) => (
+              <option key={thread.id} value={thread.id}>
+                {thread.title || `会话 ${threads.length - index}`}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={handleNewThread}
+            disabled={threadsLoading || isStreaming || !isReady}
+            style={{
+              flexShrink: 0,
+              height: 36,
+              padding: '0 12px',
+              border: 'none',
+              borderRadius: 10,
+              background: primaryColor,
+              color: '#fff',
+              cursor: 'pointer',
+              opacity: threadsLoading || isStreaming || !isReady ? 0.5 : 1,
+            }}
+          >
+            新会话
+          </button>
+        </div>
+      )}
+
+      {threadListEnabled && threadError && (
+        <div style={{
+          padding: '8px 12px',
+          borderBottom: '1px solid #f3f4f6',
+          color: '#dc2626',
+          fontSize: 12,
+          background: '#fef2f2',
+        }}>
+          {threadError}
+        </div>
+      )}
+
       {/* Messages */}
       <MessageList
         messages={messages}
@@ -305,8 +503,12 @@ export function ChatWidget({
               border: '1px solid #d9d9d9',
               borderRadius: 4,
               fontSize: 12,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
             }}>
-              📎 {f.name}
+              <AttachmentIcon size={14} />
+              <span>{f.name}</span>
               <button
                 onClick={() => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
                 style={{ marginLeft: 8, border: 'none', background: 'none', cursor: 'pointer' }}
@@ -346,9 +548,13 @@ export function ChatWidget({
             background: 'transparent',
             cursor: 'pointer',
             opacity: isStreaming || !isReady ? 0.5 : 1,
+            color: '#3D3D3D',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
         >
-          📎
+          <AttachmentIcon />
         </button>
 
         <textarea
