@@ -147,7 +147,7 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
                 });
                 const searchAvailable = sdk.channelConfig?.web_search_enabled === true;
                 setWebSearchAvailable(searchAvailable);
-                setWebSearchEnabled(false);
+                setWebSearchEnabled(searchAvailable);
                 // Create temporary user if not provided
                 if (!user) {
                     let tempUserId = sessionStorage.getItem(`aa_temp_user_${channelKey}`);

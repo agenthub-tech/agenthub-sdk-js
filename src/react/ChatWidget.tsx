@@ -209,7 +209,7 @@ export function ChatWidget({
         });
         const searchAvailable = sdk.channelConfig?.web_search_enabled === true;
         setWebSearchAvailable(searchAvailable);
-        setWebSearchEnabled(false);
+        setWebSearchEnabled(searchAvailable);
 
         // Create temporary user if not provided
         if (!user) {
