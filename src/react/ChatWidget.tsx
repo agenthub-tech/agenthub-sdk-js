@@ -33,6 +33,15 @@ function AttachmentIcon({ size = 16 }: { size?: number }): JSX.Element {
   );
 }
 
+function WebSearchIcon({ size = 17 }: { size?: number }): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M3.5 12h17M12 3c2.5 2.5 3.8 5.5 3.8 9S14.5 18.5 12 21M12 3C9.5 5.5 8.2 8.5 8.2 12s1.3 6.5 3.8 9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 type ChannelUITheme = {
   chat_panel?: {
     primary_color?: string;
@@ -84,6 +93,8 @@ export function ChatWidget({
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [webSearchAvailable, setWebSearchAvailable] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [threads, setThreads] = useState<Array<{ id: string; title: string | null; updatedAt: string | null }>>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -171,6 +182,8 @@ export function ChatWidget({
   useEffect(() => {
     const init = async () => {
       try {
+        setWebSearchAvailable(false);
+        setWebSearchEnabled(false);
         const sdk = new WebAASDK();
         sdkRef.current = sdk;
 
@@ -194,6 +207,9 @@ export function ChatWidget({
           ...resolveThemeFromChannelConfig(sdk.channelConfig?.ui_theme),
           ...theme,
         });
+        const searchAvailable = sdk.channelConfig?.web_search_enabled === true;
+        setWebSearchAvailable(searchAvailable);
+        setWebSearchEnabled(searchAvailable);
 
         // Create temporary user if not provided
         if (!user) {
@@ -297,6 +313,7 @@ export function ChatWidget({
     const emitter = sdkRef.current.run({
       userInput: text,
       files: pendingFiles.length > 0 ? pendingFiles : undefined,
+      webSearchEnabled,
     });
     emitterRef.current = emitter;
 
@@ -353,7 +370,7 @@ export function ChatWidget({
       ));
       setIsStreaming(false);
     });
-  }, [inputValue, pendingFiles, isReady, refreshThreads, threadListEnabled]);
+  }, [inputValue, pendingFiles, isReady, refreshThreads, threadListEnabled, webSearchEnabled]);
 
   // Stop
   const handleStop = useCallback(() => {
@@ -556,6 +573,33 @@ export function ChatWidget({
         >
           <AttachmentIcon />
         </button>
+
+        {webSearchAvailable && (
+          <button
+            type="button"
+            onClick={() => setWebSearchEnabled((enabled) => !enabled)}
+            disabled={isStreaming || !isReady}
+            aria-label={webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'}
+            aria-pressed={webSearchEnabled}
+            title={webSearchEnabled ? '联网搜索已开启' : '联网搜索已关闭'}
+            style={{
+              flexShrink: 0,
+              width: 32,
+              height: 32,
+              border: 'none',
+              borderRadius: 8,
+              background: webSearchEnabled ? `${primaryColor}18` : 'transparent',
+              cursor: isStreaming || !isReady ? 'not-allowed' : 'pointer',
+              opacity: isStreaming || !isReady ? 0.5 : 1,
+              color: webSearchEnabled ? primaryColor : '#9CA3AF',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <WebSearchIcon />
+          </button>
+        )}
 
         <textarea
           value={inputValue}

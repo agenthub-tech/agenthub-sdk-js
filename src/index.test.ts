@@ -584,6 +584,21 @@ describe('WebAASDK.run', () => {
     expect(body.reasoning).toEqual({ mode: 'on' });
   });
 
+  it('should include the per-session web search choice in payload', async () => {
+    const sseFetch = mockFetchSSE([
+      sseEvent('RunStarted', { run_id: 's-search' }),
+      sseEvent('RunFinished', {}),
+    ]);
+
+    const sdk = new WebAASDK();
+    await initSDK(sdk, sseFetch);
+
+    await collectEvents(sdk.run({ userInput: '杭州天气', webSearchEnabled: false }));
+
+    const body = JSON.parse(sseFetch.mock.calls[0][1].body);
+    expect(body.web_search_enabled).toBe(false);
+  });
+
   it('should return an EventEmitter immediately', async () => {
     const sseFetch = mockFetchSSE([sseEvent('RunFinished', {})]);
     const sdk = new WebAASDK();

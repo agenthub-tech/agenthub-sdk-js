@@ -12,6 +12,9 @@ const DEFAULT_THEME = {
 function AttachmentIcon({ size = 16 }) {
     return (_jsx("svg", { viewBox: "0 0 1024 1024", width: size, height: size, "aria-hidden": "true", children: _jsx("path", { d: "M516.373333 375.978667l136.576-136.576a147.797333 147.797333 0 0 1 208.853334-0.021334 147.690667 147.690667 0 0 1-0.042667 208.832l-204.8 204.778667v0.021333l-153.621333 153.6c-85.973333 85.973333-225.28 85.973333-311.253334 0.021334-85.994667-85.973333-85.973333-225.216 0.149334-311.36L431.146667 256.362667a21.333333 21.333333 0 0 0-30.165334-30.165334L162.069333 465.066667c-102.805333 102.826667-102.826667 269.056-0.149333 371.733333 102.613333 102.613333 268.970667 102.613333 371.584 0l153.6-153.642667h0.021333l0.021334-0.021333 204.778666-204.778667c74.325333-74.325333 74.346667-194.858667 0.021334-269.184-74.24-74.24-194.88-74.24-269.162667 0.042667l-136.576 136.554667-187.626667 187.626666a117.845333 117.845333 0 0 0-0.106666 166.826667 118.037333 118.037333 0 0 0 166.826666-0.106667l255.850667-255.829333a21.333333 21.333333 0 0 0-30.165333-30.165333L435.136 669.973333a75.370667 75.370667 0 0 1-106.496 0.106667 75.178667 75.178667 0 0 1 0.128-106.496l187.605333-187.605333z", fill: "currentColor" }) }));
 }
+function WebSearchIcon({ size = 17 }) {
+    return (_jsxs("svg", { viewBox: "0 0 24 24", width: size, height: size, "aria-hidden": "true", children: [_jsx("circle", { cx: "12", cy: "12", r: "9", fill: "none", stroke: "currentColor", strokeWidth: "1.8" }), _jsx("path", { d: "M3.5 12h17M12 3c2.5 2.5 3.8 5.5 3.8 9S14.5 18.5 12 21M12 3C9.5 5.5 8.2 8.5 8.2 12s1.3 6.5 3.8 9", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round" })] }));
+}
 function resolveThemeFromChannelConfig(uiTheme) {
     if (!uiTheme || typeof uiTheme !== 'object')
         return {};
@@ -33,6 +36,8 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
     const [isStreaming, setIsStreaming] = useState(false);
     const [pendingFiles, setPendingFiles] = useState([]);
     const [isReady, setIsReady] = useState(false);
+    const [webSearchAvailable, setWebSearchAvailable] = useState(false);
+    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
     const [error, setError] = useState(null);
     const [threads, setThreads] = useState([]);
     const [activeThreadId, setActiveThreadId] = useState(null);
@@ -117,6 +122,8 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
     useEffect(() => {
         const init = async () => {
             try {
+                setWebSearchAvailable(false);
+                setWebSearchEnabled(false);
                 const sdk = new WebAASDK();
                 sdkRef.current = sdk;
                 // Set custom dialog handler
@@ -138,6 +145,9 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
                     ...resolveThemeFromChannelConfig(sdk.channelConfig?.ui_theme),
                     ...theme,
                 });
+                const searchAvailable = sdk.channelConfig?.web_search_enabled === true;
+                setWebSearchAvailable(searchAvailable);
+                setWebSearchEnabled(searchAvailable);
                 // Create temporary user if not provided
                 if (!user) {
                     let tempUserId = sessionStorage.getItem(`aa_temp_user_${channelKey}`);
@@ -235,6 +245,7 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
         const emitter = sdkRef.current.run({
             userInput: text,
             files: pendingFiles.length > 0 ? pendingFiles : undefined,
+            webSearchEnabled,
         });
         emitterRef.current = emitter;
         // Handle events
@@ -277,7 +288,7 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
                 : m));
             setIsStreaming(false);
         });
-    }, [inputValue, pendingFiles, isReady, refreshThreads, threadListEnabled]);
+    }, [inputValue, pendingFiles, isReady, refreshThreads, threadListEnabled, webSearchEnabled]);
     // Stop
     const handleStop = useCallback(() => {
         sdkRef.current?.disconnect();
@@ -391,7 +402,20 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
                             display: 'inline-flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                        }, children: _jsx(AttachmentIcon, {}) }), _jsx("textarea", { value: inputValue, onChange: (e) => setInputValue(e.target.value), placeholder: placeholder, disabled: isStreaming || !isReady, onKeyDown: (e) => {
+                        }, children: _jsx(AttachmentIcon, {}) }), webSearchAvailable && (_jsx("button", { type: "button", onClick: () => setWebSearchEnabled((enabled) => !enabled), disabled: isStreaming || !isReady, "aria-label": webSearchEnabled ? '关闭联网搜索' : '开启联网搜索', "aria-pressed": webSearchEnabled, title: webSearchEnabled ? '联网搜索已开启' : '联网搜索已关闭', style: {
+                            flexShrink: 0,
+                            width: 32,
+                            height: 32,
+                            border: 'none',
+                            borderRadius: 8,
+                            background: webSearchEnabled ? `${primaryColor}18` : 'transparent',
+                            cursor: isStreaming || !isReady ? 'not-allowed' : 'pointer',
+                            opacity: isStreaming || !isReady ? 0.5 : 1,
+                            color: webSearchEnabled ? primaryColor : '#9CA3AF',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }, children: _jsx(WebSearchIcon, {}) })), _jsx("textarea", { value: inputValue, onChange: (e) => setInputValue(e.target.value), placeholder: placeholder, disabled: isStreaming || !isReady, onKeyDown: (e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
                                 handleSend();

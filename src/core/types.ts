@@ -65,6 +65,7 @@ export interface RunOptions {
   runId?: string;
   toolResult?: Record<string, unknown>;
   reasoning?: ReasoningOptions;
+  webSearchEnabled?: boolean;
   files?: File[];
 }
 
@@ -79,6 +80,7 @@ export interface ChannelConfig {
   channel_id?: string;
   name?: string;
   permission_scope?: Record<string, unknown>;
+  web_search_enabled?: boolean;
   ui_theme?: Record<string, unknown>;
 }
 

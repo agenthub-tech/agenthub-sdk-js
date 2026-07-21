@@ -257,6 +257,7 @@ export class WebAASDK {
       if (options.runId !== undefined) body.run_id = options.runId;
       if (options.toolResult !== undefined) body.tool_result = options.toolResult;
       if (options.reasoning !== undefined) body.reasoning = options.reasoning;
+      if (options.webSearchEnabled !== undefined) body.web_search_enabled = options.webSearchEnabled;
       if (this._userId) body.user_id = this._userId;
       if (options.threadId !== undefined) {
         body.thread_id = options.threadId;
@@ -275,6 +276,7 @@ export class WebAASDK {
         if (body.user_id !== undefined) formData.append('user_id', String(body.user_id));
         if (body.thread_id !== undefined) formData.append('thread_id', String(body.thread_id));
         if (body.reasoning !== undefined) formData.append('reasoning', JSON.stringify(body.reasoning));
+        if (body.web_search_enabled !== undefined) formData.append('web_search_enabled', String(body.web_search_enabled));
         for (const file of options.files!) {
           formData.append('files', file);
         }
@@ -506,7 +508,13 @@ export class WebAASDK {
               }
 
               await this._startSSEStream(
-                { userInput: '', runId: this._runId ?? undefined, toolResult, reasoning: options.reasoning },
+                {
+                  userInput: '',
+                  runId: this._runId ?? undefined,
+                  toolResult,
+                  reasoning: options.reasoning,
+                  webSearchEnabled: options.webSearchEnabled,
+                },
                 emitter, 0,
               );
               return;
