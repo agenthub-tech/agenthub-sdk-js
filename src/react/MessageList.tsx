@@ -1,6 +1,8 @@
 // React MessageList component
 
 import React, { useEffect, useRef, useState, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Message, ChartSkillResult } from '../core/types';
 import { Chart } from './Chart';
 
@@ -202,20 +204,11 @@ export function MessageList({
 
 /** Default markdown renderer using react-markdown */
 function DefaultMarkdown({ content, isUser }: { content: string; isUser: boolean }): JSX.Element {
-  // Try to use react-markdown if available
-  try {
-    // Dynamic import would be better but for now we check if it's available
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const ReactMarkdown = require('react-markdown');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const remarkGfm = require('remark-gfm');
-    
-    return (
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          // Style elements for chat bubble
-          p: ({ children }: { children?: React.ReactNode }) => <p style={{ margin: 0 }}>{children}</p>,
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+          p: ({ children }: { children?: React.ReactNode }) => <p style={{ margin: '0 0 8px' }}>{children}</p>,
           a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
             <a 
               href={href} 
@@ -225,6 +218,27 @@ function DefaultMarkdown({ content, isUser }: { content: string; isUser: boolean
             >
               {children}
             </a>
+          ),
+          img: ({ src, alt }: { src?: string; alt?: string }) => (
+            <img
+              src={src}
+              alt={alt || ''}
+              loading="lazy"
+              style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '8px 0', borderRadius: 8 }}
+            />
+          ),
+          table: ({ children }: { children?: React.ReactNode }) => (
+            <table style={{ display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', margin: '8px 0' }}>
+              {children}
+            </table>
+          ),
+          th: ({ children }: { children?: React.ReactNode }) => (
+            <th style={{ padding: '6px 10px', border: '1px solid #d9d9d9', background: 'rgba(0,0,0,0.04)', textAlign: 'left' }}>
+              {children}
+            </th>
+          ),
+          td: ({ children }: { children?: React.ReactNode }) => (
+            <td style={{ padding: '6px 10px', border: '1px solid #d9d9d9' }}>{children}</td>
           ),
           code: ({ className, children }: { className?: string; children?: React.ReactNode }) => {
             const isInline = !className;
@@ -264,29 +278,10 @@ function DefaultMarkdown({ content, isUser }: { content: string; isUser: boolean
               {children}
             </blockquote>
           ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    );
-  } catch {
-    // Fallback: simple line-by-line rendering
-    return <FallbackMarkdown content={content} />;
-  }
-}
-
-/** Fallback markdown renderer when react-markdown is not available */
-function FallbackMarkdown({ content }: { content: string }): JSX.Element {
-  const lines = content.split('\n');
-  return (
-    <>
-      {lines.map((line, i) => (
-        <React.Fragment key={i}>
-          {line || '\u00A0'}
-          {i < lines.length - 1 && <br />}
-        </React.Fragment>
-      ))}
-    </>
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   );
 }
 

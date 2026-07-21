@@ -1,6 +1,8 @@
-import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 // React MessageList component
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Chart } from './Chart';
 function AttachmentIcon({ size = 14 }) {
     return (_jsx("svg", { viewBox: "0 0 1024 1024", width: size, height: size, "aria-hidden": "true", children: _jsx("path", { d: "M516.373333 375.978667l136.576-136.576a147.797333 147.797333 0 0 1 208.853334-0.021334 147.690667 147.690667 0 0 1-0.042667 208.832l-204.8 204.778667v0.021333l-153.621333 153.6c-85.973333 85.973333-225.28 85.973333-311.253334 0.021334-85.994667-85.973333-85.973333-225.216 0.149334-311.36L431.146667 256.362667a21.333333 21.333333 0 0 0-30.165334-30.165334L162.069333 465.066667c-102.805333 102.826667-102.826667 269.056-0.149333 371.733333 102.613333 102.613333 268.970667 102.613333 371.584 0l153.6-153.642667h0.021333l0.021334-0.021333 204.778666-204.778667c74.325333-74.325333 74.346667-194.858667 0.021334-269.184-74.24-74.24-194.88-74.24-269.162667 0.042667l-136.576 136.554667-187.626667 187.626666a117.845333 117.845333 0 0 0-0.106666 166.826667 118.037333 118.037333 0 0 0 166.826666-0.106667l255.850667-255.829333a21.333333 21.333333 0 0 0-30.165333-30.165333L435.136 669.973333a75.370667 75.370667 0 0 1-106.496 0.106667 75.178667 75.178667 0 0 1 0.128-106.496l187.605333-187.605333z", fill: "currentColor" }) }));
@@ -99,54 +101,40 @@ export function MessageList({ messages, primaryColor = '#1890ff', typewriter = t
 }
 /** Default markdown renderer using react-markdown */
 function DefaultMarkdown({ content, isUser }) {
-    // Try to use react-markdown if available
-    try {
-        // Dynamic import would be better but for now we check if it's available
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const ReactMarkdown = require('react-markdown');
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const remarkGfm = require('remark-gfm');
-        return (_jsx(ReactMarkdown, { remarkPlugins: [remarkGfm], components: {
-                // Style elements for chat bubble
-                p: ({ children }) => _jsx("p", { style: { margin: 0 }, children: children }),
-                a: ({ href, children }) => (_jsx("a", { href: href, target: "_blank", rel: "noopener noreferrer", style: { color: isUser ? '#e6f7ff' : primaryColor }, children: children })),
-                code: ({ className, children }) => {
-                    const isInline = !className;
-                    return isInline ? (_jsx("code", { style: {
-                            background: isUser ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.06)',
-                            padding: '2px 6px',
-                            borderRadius: 4,
-                            fontSize: 13,
-                        }, children: children })) : (_jsx("code", { style: {
-                            display: 'block',
-                            background: isUser ? 'rgba(255,255,255,0.1)' : '#f0f0f0',
-                            padding: '8px 12px',
-                            borderRadius: 6,
-                            fontSize: 13,
-                            overflowX: 'auto',
-                        }, children: children }));
-                },
-                ul: ({ children }) => _jsx("ul", { style: { margin: '8px 0', paddingLeft: 20 }, children: children }),
-                ol: ({ children }) => _jsx("ol", { style: { margin: '8px 0', paddingLeft: 20 }, children: children }),
-                li: ({ children }) => _jsx("li", { style: { margin: '4px 0' }, children: children }),
-                strong: ({ children }) => _jsx("strong", { style: { fontWeight: 600 }, children: children }),
-                blockquote: ({ children }) => (_jsx("blockquote", { style: {
-                        borderLeft: `3px solid ${isUser ? 'rgba(255,255,255,0.3)' : '#d9d9d9'}`,
-                        margin: '8px 0',
-                        paddingLeft: 12,
-                        opacity: 0.9,
-                    }, children: children })),
-            }, children: content }));
-    }
-    catch {
-        // Fallback: simple line-by-line rendering
-        return _jsx(FallbackMarkdown, { content: content });
-    }
-}
-/** Fallback markdown renderer when react-markdown is not available */
-function FallbackMarkdown({ content }) {
-    const lines = content.split('\n');
-    return (_jsx(_Fragment, { children: lines.map((line, i) => (_jsxs(React.Fragment, { children: [line || '\u00A0', i < lines.length - 1 && _jsx("br", {})] }, i))) }));
+    return (_jsx(ReactMarkdown, { remarkPlugins: [remarkGfm], components: {
+            p: ({ children }) => _jsx("p", { style: { margin: '0 0 8px' }, children: children }),
+            a: ({ href, children }) => (_jsx("a", { href: href, target: "_blank", rel: "noopener noreferrer", style: { color: isUser ? '#e6f7ff' : primaryColor }, children: children })),
+            img: ({ src, alt }) => (_jsx("img", { src: src, alt: alt || '', loading: "lazy", style: { display: 'block', maxWidth: '100%', height: 'auto', margin: '8px 0', borderRadius: 8 } })),
+            table: ({ children }) => (_jsx("table", { style: { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', margin: '8px 0' }, children: children })),
+            th: ({ children }) => (_jsx("th", { style: { padding: '6px 10px', border: '1px solid #d9d9d9', background: 'rgba(0,0,0,0.04)', textAlign: 'left' }, children: children })),
+            td: ({ children }) => (_jsx("td", { style: { padding: '6px 10px', border: '1px solid #d9d9d9' }, children: children })),
+            code: ({ className, children }) => {
+                const isInline = !className;
+                return isInline ? (_jsx("code", { style: {
+                        background: isUser ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.06)',
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        fontSize: 13,
+                    }, children: children })) : (_jsx("code", { style: {
+                        display: 'block',
+                        background: isUser ? 'rgba(255,255,255,0.1)' : '#f0f0f0',
+                        padding: '8px 12px',
+                        borderRadius: 6,
+                        fontSize: 13,
+                        overflowX: 'auto',
+                    }, children: children }));
+            },
+            ul: ({ children }) => _jsx("ul", { style: { margin: '8px 0', paddingLeft: 20 }, children: children }),
+            ol: ({ children }) => _jsx("ol", { style: { margin: '8px 0', paddingLeft: 20 }, children: children }),
+            li: ({ children }) => _jsx("li", { style: { margin: '4px 0' }, children: children }),
+            strong: ({ children }) => _jsx("strong", { style: { fontWeight: 600 }, children: children }),
+            blockquote: ({ children }) => (_jsx("blockquote", { style: {
+                    borderLeft: `3px solid ${isUser ? 'rgba(255,255,255,0.3)' : '#d9d9d9'}`,
+                    margin: '8px 0',
+                    paddingLeft: 12,
+                    opacity: 0.9,
+                }, children: children })),
+        }, children: content }));
 }
 // Reference for primary color in DefaultMarkdown
 const primaryColor = '#1890ff';
