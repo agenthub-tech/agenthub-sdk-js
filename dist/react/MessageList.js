@@ -10,6 +10,7 @@ function AttachmentIcon({ size = 14 }) {
 export function MessageList({ messages, primaryColor = '#1890ff', typewriter = true, typewriterSpeed = 20, renderMarkdown, renderChart, style, className, }) {
     const listRef = useRef(null);
     const [displayedContent, setDisplayedContent] = useState(new Map());
+    const [previewImageUrl, setPreviewImageUrl] = useState(null);
     // Track streaming messages for typewriter effect
     const streamingMsg = useMemo(() => messages.find(m => m.state === 'streaming' && m.content), [messages]);
     // Typewriter effect
@@ -57,6 +58,16 @@ export function MessageList({ messages, primaryColor = '#1890ff', typewriter = t
             listRef.current.scrollTop = listRef.current.scrollHeight;
         }
     }, [messages, displayedContent]);
+    useEffect(() => {
+        if (!previewImageUrl)
+            return;
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape')
+                setPreviewImageUrl(null);
+        };
+        window.addEventListener('keydown', closeOnEscape);
+        return () => window.removeEventListener('keydown', closeOnEscape);
+    }, [previewImageUrl]);
     return (_jsxs("div", { ref: listRef, style: {
             flex: 1,
             overflow: 'auto',
@@ -81,7 +92,7 @@ export function MessageList({ messages, primaryColor = '#1890ff', typewriter = t
                             color: isUser ? '#fff' : '#1a1a1a',
                         }, children: [msg.files && msg.files.length > 0 && (_jsx("div", { style: { marginBottom: 8, opacity: 0.8 }, children: msg.files.map((f, i) => (_jsxs("div", { style: { fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }, children: [_jsx(AttachmentIcon, {}), _jsx("span", { children: f.name })] }, i))) })), _jsxs("div", { style: { fontSize: 14, lineHeight: 1.6 }, children: [renderMarkdown
                                         ? renderMarkdown(content || '')
-                                        : _jsx(DefaultMarkdown, { content: content || '', isUser: isUser }), msg.chartData && (renderChart
+                                        : _jsx(DefaultMarkdown, { content: content || '', isUser: isUser, onPreviewImage: setPreviewImageUrl }), msg.chartData && (renderChart
                                         ? renderChart(msg.chartData)
                                         : _jsx(Chart, { data: msg.chartData, primaryColor: primaryColor }))] }), isStreaming && !msg.content && (_jsx("span", { children: "\u6B63\u5728\u601D\u8003..." })), isStreaming && content && (_jsx("span", { style: {
                                     display: 'inline-block',
@@ -97,14 +108,62 @@ export function MessageList({ messages, primaryColor = '#1890ff', typewriter = t
           0%, 50% { opacity: 1; }
           51%, 100% { opacity: 0; }
         }
-      ` })] }));
+      ` }), previewImageUrl && (_jsxs("div", { role: "dialog", "aria-modal": "true", "aria-label": "\u56FE\u7247\u9884\u89C8", onClick: () => setPreviewImageUrl(null), style: {
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 10000,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 24,
+                    background: 'rgba(0, 0, 0, 0.82)',
+                    cursor: 'zoom-out',
+                }, children: [_jsx("button", { type: "button", "aria-label": "\u5173\u95ED\u56FE\u7247\u9884\u89C8", onClick: () => setPreviewImageUrl(null), style: {
+                            position: 'absolute',
+                            top: 16,
+                            right: 20,
+                            width: 38,
+                            height: 38,
+                            border: 0,
+                            borderRadius: '50%',
+                            background: 'rgba(255, 255, 255, 0.18)',
+                            color: '#fff',
+                            fontSize: 26,
+                            lineHeight: '38px',
+                            cursor: 'pointer',
+                        }, children: "\u00D7" }), _jsx("img", { src: previewImageUrl, alt: "\u5168\u56FE\u9884\u89C8", onClick: (event) => event.stopPropagation(), style: {
+                            display: 'block',
+                            maxWidth: '92vw',
+                            maxHeight: '90vh',
+                            width: 'auto',
+                            height: 'auto',
+                            objectFit: 'contain',
+                            borderRadius: 8,
+                            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.45)',
+                            cursor: 'default',
+                        } })] }))] }));
 }
 /** Default markdown renderer using react-markdown */
-function DefaultMarkdown({ content, isUser }) {
+function DefaultMarkdown({ content, isUser, onPreviewImage, }) {
     return (_jsx(ReactMarkdown, { remarkPlugins: [remarkGfm], components: {
             p: ({ children }) => _jsx("p", { style: { margin: '0 0 8px' }, children: children }),
             a: ({ href, children }) => (_jsx("a", { href: href, target: "_blank", rel: "noopener noreferrer", style: { color: isUser ? '#e6f7ff' : primaryColor }, children: children })),
-            img: ({ src, alt }) => (_jsx("img", { src: src, alt: alt || '', loading: "lazy", style: { display: 'block', maxWidth: '100%', height: 'auto', margin: '8px 0', borderRadius: 8 } })),
+            img: ({ src, alt }) => (_jsx("img", { src: src, alt: alt || '', loading: "lazy", role: src ? 'button' : undefined, tabIndex: src ? 0 : undefined, onClick: () => src && onPreviewImage(src), onKeyDown: (event) => {
+                    if (src && (event.key === 'Enter' || event.key === ' ')) {
+                        event.preventDefault();
+                        onPreviewImage(src);
+                    }
+                }, style: {
+                    display: 'block',
+                    maxWidth: 'min(100%, 360px)',
+                    maxHeight: 240,
+                    width: 'auto',
+                    height: 'auto',
+                    objectFit: 'contain',
+                    margin: '8px 0',
+                    borderRadius: 8,
+                    cursor: src ? 'zoom-in' : 'default',
+                } })),
             table: ({ children }) => (_jsx("table", { style: { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', margin: '8px 0' }, children: children })),
             th: ({ children }) => (_jsx("th", { style: { padding: '6px 10px', border: '1px solid #d9d9d9', background: 'rgba(0,0,0,0.04)', textAlign: 'left' }, children: children })),
             td: ({ children }) => (_jsx("td", { style: { padding: '6px 10px', border: '1px solid #d9d9d9' }, children: children })),

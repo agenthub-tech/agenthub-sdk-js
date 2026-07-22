@@ -46,6 +46,7 @@ export function MessageList({
 }: MessageListProps): JSX.Element {
   const listRef = useRef<HTMLDivElement>(null);
   const [displayedContent, setDisplayedContent] = useState<Map<string, string>>(new Map());
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   // Track streaming messages for typewriter effect
   const streamingMsg = useMemo(() => 
@@ -104,6 +105,15 @@ export function MessageList({
     }
   }, [messages, displayedContent]);
 
+  useEffect(() => {
+    if (!previewImageUrl) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewImageUrl(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [previewImageUrl]);
+
   return (
     <div
       ref={listRef}
@@ -158,7 +168,11 @@ export function MessageList({
               <div style={{ fontSize: 14, lineHeight: 1.6 }}>
                 {renderMarkdown 
                   ? renderMarkdown(content || '')
-                  : <DefaultMarkdown content={content || ''} isUser={isUser} />
+                  : <DefaultMarkdown
+                      content={content || ''}
+                      isUser={isUser}
+                      onPreviewImage={setPreviewImageUrl}
+                    />
                 }
 
                 {/* Chart */}
@@ -198,12 +212,77 @@ export function MessageList({
           51%, 100% { opacity: 0; }
         }
       `}</style>
+      {previewImageUrl && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="图片预览"
+          onClick={() => setPreviewImageUrl(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            background: 'rgba(0, 0, 0, 0.82)',
+            cursor: 'zoom-out',
+          }}
+        >
+          <button
+            type="button"
+            aria-label="关闭图片预览"
+            onClick={() => setPreviewImageUrl(null)}
+            style={{
+              position: 'absolute',
+              top: 16,
+              right: 20,
+              width: 38,
+              height: 38,
+              border: 0,
+              borderRadius: '50%',
+              background: 'rgba(255, 255, 255, 0.18)',
+              color: '#fff',
+              fontSize: 26,
+              lineHeight: '38px',
+              cursor: 'pointer',
+            }}
+          >
+            ×
+          </button>
+          <img
+            src={previewImageUrl}
+            alt="全图预览"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              display: 'block',
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              width: 'auto',
+              height: 'auto',
+              objectFit: 'contain',
+              borderRadius: 8,
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.45)',
+              cursor: 'default',
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
 /** Default markdown renderer using react-markdown */
-function DefaultMarkdown({ content, isUser }: { content: string; isUser: boolean }): JSX.Element {
+function DefaultMarkdown({
+  content,
+  isUser,
+  onPreviewImage,
+}: {
+  content: string;
+  isUser: boolean;
+  onPreviewImage: (url: string) => void;
+}): JSX.Element {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -224,7 +303,26 @@ function DefaultMarkdown({ content, isUser }: { content: string; isUser: boolean
               src={src}
               alt={alt || ''}
               loading="lazy"
-              style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '8px 0', borderRadius: 8 }}
+              role={src ? 'button' : undefined}
+              tabIndex={src ? 0 : undefined}
+              onClick={() => src && onPreviewImage(src)}
+              onKeyDown={(event) => {
+                if (src && (event.key === 'Enter' || event.key === ' ')) {
+                  event.preventDefault();
+                  onPreviewImage(src);
+                }
+              }}
+              style={{
+                display: 'block',
+                maxWidth: 'min(100%, 360px)',
+                maxHeight: 240,
+                width: 'auto',
+                height: 'auto',
+                objectFit: 'contain',
+                margin: '8px 0',
+                borderRadius: 8,
+                cursor: src ? 'zoom-in' : 'default',
+              }}
             />
           ),
           table: ({ children }: { children?: React.ReactNode }) => (

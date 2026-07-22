@@ -33,5 +33,8 @@ describe('MessageList markdown rendering', () => {
     expect(html).toContain('<table');
     expect(html).toContain('src="https://example.com/image.jpg"');
     expect(html).toContain('alt="示例图片"');
+    expect(html).toContain('max-width:min(100%, 360px)');
+    expect(html).toContain('max-height:240px');
+    expect(html).toContain('cursor:zoom-in');
   });
 });
