@@ -37,15 +37,4 @@ emitter.on('done', () => {
 - `apiBase` is required unless your app and Agent Hub API are same-origin.
 - SDK-side skills must use `executionMode: 'sdk'`.
 
-## Delegated SDK Skills
-
-Register exported skills with `exposedForDelegation: true`, then use `claimDelegations()` and `completeDelegation()` from a long-running SDK process.
-
-```ts
-const tasks = await sdk.claimDelegations(1)
-for (const task of tasks) {
-  const result = await executeLocally(task.targetSkill, task.params)
-  await sdk.completeDelegation(task.delegationRunId, { result })
-}
-```
 - `SkillExecuteInstruction` is auto-dispatched and auto-resumed by the SDK.
