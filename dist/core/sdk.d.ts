@@ -1,4 +1,4 @@
-import { type SDKEventEmitter, type UserIdentity, type InitOptions, type RunOptions, type ChannelConfig, type DialogParams, type DialogResult } from './types';
+import { type SDKEventEmitter, type UserIdentity, type InitOptions, type RunOptions, type ChannelConfig, type DelegationTask, type DialogParams, type DialogResult } from './types';
 export declare class WebAASDK {
     private _channelId;
     private _channelKey;
@@ -38,6 +38,11 @@ export declare class WebAASDK {
      * Initialize the SDK.
      */
     init(options: InitOptions): Promise<void>;
+    claimDelegations(limit?: number): Promise<DelegationTask[]>;
+    completeDelegation(delegationRunId: string, options?: {
+        result?: Record<string, unknown>;
+        error?: string;
+    }): Promise<boolean>;
     /**
      * Send a user prompt to the agent and return an EventEmitter that streams AG-UI events.
      */
