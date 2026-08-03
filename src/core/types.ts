@@ -33,6 +33,21 @@ export interface SkillDefinition {
   cache?: SkillCachePolicy;
   resultCacheFields?: Array<{ path: string; ttl?: number }>;
   nonSummaryResultFields?: string[];
+  exposedForDelegation?: boolean;
+  delegationRiskLevel?: 'low' | 'medium' | 'high';
+  availableSources?: string[];
+}
+
+export interface DelegationTask {
+  delegationRunId: string;
+  targetSkill: string;
+  params: Record<string, unknown>;
+  sourceRunId?: string;
+  sourceChannelId?: string;
+  targetChannelId?: string;
+  actor: Record<string, unknown>;
+  identity: Record<string, unknown>;
+  clientContext: Record<string, unknown>;
 }
 
 export interface UserIdentity {

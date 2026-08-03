@@ -13,6 +13,7 @@ import {
   type RunOptions,
   type AGUIEvent,
   type ChannelConfig,
+  type DelegationTask,
   type ChartSkillResult,
   type ChartType,
   type EChartsOption,
@@ -36,6 +37,10 @@ const KNOWN_EVENT_TYPES = new Set([
   'StateSnapshotEvent',
   'Error',
 ]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export class WebAASDK {
   private _channelId: string | null = null;
@@ -178,13 +183,16 @@ export class WebAASDK {
 
     // 3. Register skills with backend
     if (skills.length > 0) {
-      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode, resultCacheFields, nonSummaryResultFields }) => ({
+      const skillsMeta = skills.map(({ name, schema, promptInjection, executionMode, resultCacheFields, nonSummaryResultFields, exposedForDelegation, delegationRiskLevel, availableSources }) => ({
         name,
         schema,
         prompt_injection: promptInjection ?? null,
         execution_mode: executionMode,
         ...(resultCacheFields ? { result_cache_fields: resultCacheFields } : {}),
         ...(nonSummaryResultFields ? { non_summary_result_fields: nonSummaryResultFields } : {}),
+        ...(exposedForDelegation !== undefined ? { exposed_for_delegation: exposedForDelegation } : {}),
+        ...(delegationRiskLevel ? { delegation_risk_level: delegationRiskLevel } : {}),
+        ...(availableSources ? { available_sources: availableSources } : {}),
       }));
 
       const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/register`, {
@@ -218,6 +226,50 @@ export class WebAASDK {
     this._registerBuiltinSkillHandlers();
 
     this._log('init complete');
+  }
+
+  async claimDelegations(limit = 20): Promise<DelegationTask[]> {
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const response = await this._fetchWithAuthRetry(
+      `${this._apiBase}/api/sdk/delegations/pending?limit=${safeLimit}`,
+    );
+    if (!response.ok) {
+      const message = await this._readErrorMessage(response);
+      throw new Error(`Claim delegations failed (${response.status}): ${message}`);
+    }
+    const body = await response.json();
+    const tasks = Array.isArray(body.tasks) ? body.tasks : [];
+    return tasks.map((item: Record<string, unknown>) => ({
+      delegationRunId: String(item.delegation_run_id ?? ''),
+      targetSkill: String(item.target_skill ?? ''),
+      params: isRecord(item.params) ? item.params : {},
+      sourceRunId: item.source_run_id ? String(item.source_run_id) : undefined,
+      sourceChannelId: item.source_channel_id ? String(item.source_channel_id) : undefined,
+      targetChannelId: item.target_channel_id ? String(item.target_channel_id) : undefined,
+      actor: isRecord(item.actor) ? item.actor : {},
+      identity: isRecord(item.identity) ? item.identity : {},
+      clientContext: isRecord(item.client_context) ? item.client_context : {},
+    }));
+  }
+
+  async completeDelegation(
+    delegationRunId: string,
+    options: { result?: Record<string, unknown>; error?: string } = {},
+  ): Promise<boolean> {
+    const response = await this._fetchWithAuthRetry(
+      `${this._apiBase}/api/sdk/delegations/${encodeURIComponent(delegationRunId)}/complete`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ result: options.result ?? {}, error: options.error ?? null }),
+      },
+    );
+    if (!response.ok) {
+      const message = await this._readErrorMessage(response);
+      throw new Error(`Complete delegation failed (${response.status}): ${message}`);
+    }
+    const body = await response.json();
+    return Boolean(body.source_run_resumed);
   }
 
   /**
