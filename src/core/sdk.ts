@@ -256,6 +256,7 @@ export class WebAASDK {
         socket.send(JSON.stringify({
           type: 'provider.register',
           provider_id: options.providerId,
+          instance_id: options.instanceId ?? options.providerId,
           skills: [...this._skills.keys()],
           capacity: Math.max(1, options.capacity ?? 1),
           runtime: options.runtime ?? 'javascript',
