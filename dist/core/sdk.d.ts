@@ -12,6 +12,9 @@ export declare class WebAASDK {
     private _protocolVersion;
     private _channelConfig;
     private _debug;
+    private _runtimeMode;
+    private _providerSocket;
+    private _providerOptions;
     private _maxRetries;
     private _retryDelay;
     private _heartbeatTimeout;
@@ -38,6 +41,7 @@ export declare class WebAASDK {
      * Initialize the SDK.
      */
     init(options: InitOptions): Promise<void>;
+    private _startSkillProvider;
     /**
      * Send a user prompt to the agent and return an EventEmitter that streams AG-UI events.
      */

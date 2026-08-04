@@ -32,6 +32,9 @@ export class WebAASDK {
         this._protocolVersion = DEFAULT_PROTOCOL_VERSION;
         this._channelConfig = null;
         this._debug = false;
+        this._runtimeMode = 'agent';
+        this._providerSocket = null;
+        this._providerOptions = null;
         // Connection lifecycle configuration
         this._maxRetries = 3;
         this._retryDelay = 1000;
@@ -119,6 +122,7 @@ export class WebAASDK {
         this._retryDelay = options.retryDelay ?? 1000;
         this._heartbeatTimeout = options.heartbeatTimeout ?? 45000;
         this._debug = options.debug ?? false;
+        this._runtimeMode = options.runtimeMode ?? 'agent';
         this._disconnected = false;
         this._log('init start | apiBase=%s channelKey=%s', this._apiBase, this._channelKey);
         const skills = options.skills ?? [];
@@ -149,6 +153,13 @@ export class WebAASDK {
                 body: JSON.stringify({
                     skills: skillsMeta,
                     protocol_version: this._protocolVersion,
+                    runtime_mode: this._runtimeMode,
+                    instance_id: options.instanceId ?? null,
+                    provider_id: options.providerId ?? null,
+                    capacity: Math.max(1, options.capacity ?? 1),
+                    runtime: options.runtime ?? 'javascript',
+                    sdk_version: SDK_VERSION,
+                    metadata: options.metadata ?? {},
                 }),
             });
             if (!response.ok) {
@@ -166,12 +177,95 @@ export class WebAASDK {
         }
         // 5. Register built-in dialog_skill handler
         this._registerBuiltinSkillHandlers();
+        if (this._runtimeMode === 'skill_provider') {
+            if (!options.providerId)
+                throw new Error('skill_provider mode requires providerId');
+            if (skills.length === 0)
+                throw new Error('skill_provider mode requires at least one skill');
+            await this._startSkillProvider(options);
+        }
         this._log('init complete');
+    }
+    async _startSkillProvider(options) {
+        this._providerOptions = options;
+        const WebSocketImpl = typeof globalThis.WebSocket !== 'undefined'
+            ? globalThis.WebSocket
+            : (await new Function('specifier', 'return import(specifier)')('ws')).default;
+        const wsBase = this._apiBase.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+        const socket = new WebSocketImpl(`${wsBase}/api/sdk/providers/ws?access_token=${encodeURIComponent(this._accessToken ?? '')}`);
+        this._providerSocket = socket;
+        await new Promise((resolve, reject) => {
+            let registered = false;
+            const onOpen = () => {
+                socket.send(JSON.stringify({
+                    type: 'provider.register',
+                    provider_id: options.providerId,
+                    skills: [...this._skills.keys()],
+                    capacity: Math.max(1, options.capacity ?? 1),
+                    runtime: options.runtime ?? 'javascript',
+                    sdk_version: SDK_VERSION,
+                    metadata: options.metadata ?? {},
+                }));
+            };
+            const onMessage = async (event) => {
+                const raw = typeof event.data === 'string' ? event.data : event.data.toString();
+                const message = JSON.parse(raw);
+                if (message.type === 'provider.registered') {
+                    registered = true;
+                    resolve();
+                    return;
+                }
+                if (message.type !== 'skill.execute')
+                    return;
+                const skill = this._skills.get(String(message.skill_name ?? ''));
+                try {
+                    if (!skill)
+                        throw new Error(`Skill '${message.skill_name}' not registered locally`);
+                    const result = await skill.execute(isRecord(message.params) ? message.params : {});
+                    socket.send(JSON.stringify({ type: 'skill.result', execution_id: message.execution_id, result }));
+                }
+                catch (error) {
+                    socket.send(JSON.stringify({
+                        type: 'skill.error',
+                        execution_id: message.execution_id,
+                        error: { message: error instanceof Error ? error.message : String(error) },
+                    }));
+                }
+            };
+            const onError = (error) => {
+                if (!registered)
+                    reject(error);
+            };
+            const onClose = () => {
+                if (!this._disconnected && this._providerOptions) {
+                    this._reconnectTimer = setTimeout(() => {
+                        this._acquireToken()
+                            .then(() => this._startSkillProvider(this._providerOptions))
+                            .catch((error) => this._log('provider reconnect failed | %s', String(error)));
+                    }, this._retryDelay);
+                }
+            };
+            if (typeof socket.addEventListener === 'function') {
+                socket.addEventListener('open', onOpen);
+                socket.addEventListener('message', onMessage);
+                socket.addEventListener('error', onError, { once: true });
+                socket.addEventListener('close', onClose, { once: true });
+            }
+            else {
+                socket.on('open', onOpen);
+                socket.on('message', (data) => onMessage({ data }));
+                socket.once('error', onError);
+                socket.once('close', onClose);
+            }
+        });
     }
     /**
      * Send a user prompt to the agent and return an EventEmitter that streams AG-UI events.
      */
     run(options) {
+        if (this._runtimeMode === 'skill_provider') {
+            throw new Error('run() is unavailable in skill_provider mode');
+        }
         const emitter = new EventEmitter();
         this._disconnected = false;
         if (options.runId) {
@@ -597,6 +691,14 @@ export class WebAASDK {
             catch { /* ignore */ }
             this._activeReader = null;
         }
+        if (this._providerSocket) {
+            try {
+                this._providerSocket.close();
+            }
+            catch { /* ignore */ }
+            this._providerSocket = null;
+        }
+        this._providerOptions = null;
     }
     /**
      * Reset user state (logout).

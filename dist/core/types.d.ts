@@ -44,6 +44,12 @@ export interface InitOptions {
     retryDelay?: number;
     heartbeatTimeout?: number;
     debug?: boolean;
+    runtimeMode?: 'agent' | 'skill_provider';
+    instanceId?: string;
+    providerId?: string;
+    capacity?: number;
+    runtime?: string;
+    metadata?: Record<string, unknown>;
 }
 export interface ReasoningOptions {
     mode?: 'default' | 'on' | 'off';
