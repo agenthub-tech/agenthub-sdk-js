@@ -31,6 +31,22 @@ emitter.on('done', () => {
 });
 ```
 
+## Skill Provider mode
+
+Node and browser runtimes can register a long-running remote Skill Provider:
+
+```ts
+await sdk.init({
+  channelKey: 'your-channel-key',
+  apiBase: 'https://your-agenthub-server',
+  runtimeMode: 'skill_provider',
+  providerId: 'stable-provider-id',
+  skills: [mySkill],
+});
+```
+
+The default `runtimeMode: 'agent'` remains backward compatible and supports `run()`.
+
 ## Notes
 
 - `channelKey` is required.
