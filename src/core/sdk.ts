@@ -276,7 +276,24 @@ export class WebAASDK {
         const skill = this._skills.get(String(message.skill_name ?? ''));
         try {
           if (!skill) throw new Error(`Skill '${message.skill_name}' not registered locally`);
-          const result = await skill.execute(isRecord(message.params) ? message.params : {});
+          const params = isRecord(message.params) ? message.params : {};
+          const reportProgress = async (progress: Record<string, unknown>) => {
+            socket.send(JSON.stringify({
+              type: 'skill.progress',
+              execution_id: message.execution_id,
+              run_id: message.run_id,
+              tool_call_id: message.tool_call_id,
+              progress,
+            }));
+          };
+          const result = skill.executeWithContext
+            ? await skill.executeWithContext(params, {
+                executionId: String(message.execution_id ?? ''),
+                runId: String(message.run_id ?? ''),
+                toolCallId: String(message.tool_call_id ?? ''),
+                reportProgress,
+              })
+            : await skill.execute(params);
           socket.send(JSON.stringify({ type: 'skill.result', execution_id: message.execution_id, result }));
         } catch (error) {
           socket.send(JSON.stringify({

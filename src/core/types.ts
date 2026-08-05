@@ -24,12 +24,23 @@ export interface SkillCachePolicy {
 
 export type CacheFreshness = 'fresh' | 'stale' | 'expired';
 
+export interface SkillExecutionContext {
+  executionId: string;
+  runId: string;
+  toolCallId: string;
+  reportProgress: (progress: Record<string, unknown>) => Promise<void>;
+}
+
 export interface SkillDefinition {
   name: string;
   schema: Record<string, unknown>;
   promptInjection?: string;
   executionMode: 'sdk' | 'backend';
   execute: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  executeWithContext?: (
+    params: Record<string, unknown>,
+    context: SkillExecutionContext,
+  ) => Promise<Record<string, unknown>>;
   cache?: SkillCachePolicy;
   resultCacheFields?: Array<{ path: string; ttl?: number }>;
   nonSummaryResultFields?: string[];
