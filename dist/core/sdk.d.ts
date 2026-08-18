@@ -48,6 +48,7 @@ export declare class WebAASDK {
     run(options: RunOptions): SDKEventEmitter;
     private _startSSEStream;
     private _scheduleReconnect;
+    private _canRetryStream;
     private _resetHeartbeat;
     private _clearHeartbeat;
     private _parseSSEStream;

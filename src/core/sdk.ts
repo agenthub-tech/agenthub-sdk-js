@@ -428,7 +428,7 @@ export class WebAASDK {
           return;
         }
 
-        if (retryCount < this._maxRetries && !this._disconnected) {
+        if (this._canRetryStream(options, retryCount)) {
           this._scheduleReconnect(options, emitter, retryCount);
           return;
         }
@@ -446,7 +446,7 @@ export class WebAASDK {
     } catch (err) {
       if (this._disconnected) return;
       const error = err instanceof Error ? err : new Error(String(err));
-      if (retryCount < this._maxRetries && !this._disconnected) {
+      if (this._canRetryStream(options, retryCount)) {
         this._scheduleReconnect(options, emitter, retryCount);
         return;
       }
@@ -464,6 +464,12 @@ export class WebAASDK {
     }, this._retryDelay);
   }
 
+  private _canRetryStream(options: RunOptions, retryCount: number): boolean {
+    // A resume request may already have consumed its tool_result before the
+    // SSE connection fails, so replaying it can corrupt the next pending call.
+    return options.toolResult === undefined && retryCount < this._maxRetries && !this._disconnected;
+  }
+
   private _resetHeartbeat(options: RunOptions, emitter: EventEmitter, retryCount: number): void {
     this._clearHeartbeat();
     if (this._disconnected) return;
@@ -474,10 +480,13 @@ export class WebAASDK {
         try { this._activeReader.cancel(); } catch { /* ignore */ }
         this._activeReader = null;
       }
-      if (retryCount < this._maxRetries) {
+      if (this._canRetryStream(options, retryCount)) {
         this._scheduleReconnect(options, emitter, retryCount);
       } else {
-        emitter.emit('error', new Error('Heartbeat timeout: no events received'));
+        const message = options.toolResult === undefined
+          ? 'Heartbeat timeout: no events received'
+          : 'Heartbeat timeout during run resume; tool_result was not replayed';
+        emitter.emit('error', new Error(message));
       }
     }, this._heartbeatTimeout);
   }
@@ -510,9 +519,14 @@ export class WebAASDK {
         const { done, value } = await reader.read();
         if (done) {
           this._clearHeartbeat();
-          if (!receivedFinish && !this._disconnected && retryCount < this._maxRetries) {
-            this._scheduleReconnect(options, emitter, retryCount);
-            return;
+          if (!receivedFinish && !this._disconnected) {
+            if (this._canRetryStream(options, retryCount)) {
+              this._scheduleReconnect(options, emitter, retryCount);
+              return;
+            }
+            if (options.toolResult !== undefined) {
+              emitter.emit('error', new Error('Run resume stream ended before completion; tool_result was not replayed'));
+            }
           }
           break;
         }
@@ -637,7 +651,7 @@ export class WebAASDK {
     } catch (err) {
       this._clearHeartbeat();
       if (this._disconnected) return;
-      if (retryCount < this._maxRetries && !this._disconnected) {
+      if (this._canRetryStream(options, retryCount)) {
         this._scheduleReconnect(options, emitter, retryCount);
         return;
       }

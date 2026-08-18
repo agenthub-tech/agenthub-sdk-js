@@ -1149,6 +1149,23 @@ describe('WebAASDK SkillExecuteInstruction auto-dispatch', () => {
 
     expect(executeFn).toHaveBeenCalledWith({});
   });
+
+  it('should not replay a resume request after a transport failure', async () => {
+    const sdk = new WebAASDK();
+    await initSDKWithSkills(sdk, []);
+    const runFetch = vi.fn().mockRejectedValue(new Error('network down'));
+    globalThis.fetch = runFetch as typeof globalThis.fetch;
+
+    const emitter = sdk.run({
+      userInput: '',
+      runId: 'run-resume',
+      toolResult: { tool_call_id: 'tc-current', result: { ok: true } },
+    });
+    const error = await new Promise<Error>((resolve) => emitter.on('error', resolve));
+
+    expect(error.message).toBe('network down');
+    expect(runFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 
