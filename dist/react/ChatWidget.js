@@ -263,6 +263,18 @@ export function ChatWidget({ channelKey, apiBase = '', theme = {}, debug = false
                     : m));
             }
         });
+        // TextMessageEnd carries the authoritative full message content. When the
+        // model calls the final_answer terminal tool after streaming a preamble,
+        // the backend only sends TextMessageEnd (no more deltas) — the END content
+        // is the complete final message and must replace the accumulated deltas.
+        emitter.on('TextMessageEnd', (event) => {
+            const content = event.payload.content;
+            if (typeof content === 'string' && content.length > 0) {
+                setMessages(prev => prev.map(m => m.id === assistantMsgId
+                    ? { ...m, content }
+                    : m));
+            }
+        });
         emitter.on('ToolCallEnd', (event) => {
             const toolName = event.payload.tool_name;
             const result = event.payload.result;
