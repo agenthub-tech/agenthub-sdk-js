@@ -501,6 +501,91 @@ async function initSDK(sdk: WebAASDK, fetchMock?: ReturnType<typeof vi.fn>) {
   globalThis.fetch = (fetchMock ?? prevFetch) as typeof globalThis.fetch;
 }
 
+describe('MCP source login lifecycle', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; vi.restoreAllMocks(); });
+
+  it('sends the AD account independently of the application user ID', async () => {
+    const sdk = new WebAASDK();
+    const fetchMock = mockFetchSuccess();
+    await initSDK(sdk, fetchMock);
+    fetchMock.mockClear();
+    await sdk.identify({ userId: 'employee-123', account: 'alice' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ user_id: 'employee-123', account: 'alice' });
+  });
+
+  it('revokes the source session when the AD account changes for the same application user', async () => {
+    const sdk = new WebAASDK();
+    const fetchMock = mockFetchSuccess();
+    await initSDK(sdk, fetchMock);
+    await sdk.identify({ userId: 'employee-123', account: 'alice', sourceSessionToken: 'alice-handle' });
+    fetchMock.mockClear();
+    await sdk.identify({ userId: 'employee-123', account: 'bob', sourceSessionToken: 'bob-handle' });
+    expect(fetchMock.mock.calls[0][0]).toContain('/source-session/revoke');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ session_token: 'alice-handle', reason: 'ACCOUNT_SWITCH' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).account).toBe('bob');
+  });
+
+  it('binds a backend proof and sends only its handle in JSON and multipart request headers', async () => {
+    const sdk = new WebAASDK();
+    await initSDK(sdk);
+    const authFetch = vi.fn().mockImplementation(async (url: string) => ({ ok: true, status: 200,
+      json: async () => url.endsWith('/source-session') ? { session_token: 'opaque-source-handle', source_subject: 'Alice' } : {},
+    }));
+    globalThis.fetch = authFetch;
+    await sdk.authenticateSource('signed-backend-proof', 'integration');
+    expect(JSON.parse(authFetch.mock.calls[0][1].body)).toEqual({ identity_assertion: 'signed-backend-proof', integration_id: 'integration' });
+    const { File: NodeFile } = await import('node:buffer');
+    for (const files of [undefined, [new NodeFile(['text'], 'test.txt') as unknown as File]]) {
+      const runFetch = mockFetchSSE([sseEvent('RunFinished', {})]);
+      globalThis.fetch = runFetch;
+      await collectEvents(sdk.run({ userInput: 'query', files }));
+      const options = runFetch.mock.calls[0][1];
+      expect(new Headers(options.headers).get('X-AgentHub-Source-Session')).toBe('opaque-source-handle');
+      const body = files ? options.body.get('context') : options.body;
+      expect(body).not.toContain('opaque-source-handle');
+      expect(body).not.toContain('signed-backend-proof');
+    }
+  });
+
+  it('failed logout clears active credentials but remains retryable with the original reason', async () => {
+    const sdk = new WebAASDK();
+    await initSDK(sdk, mockFetchSuccess());
+    await sdk.identify({ userId: 'Alice', sourceSessionToken: 'alice-handle' });
+    const fail = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+    globalThis.fetch = fail;
+    await expect(sdk.revokeSourceSession('ACCOUNT_SWITCH')).rejects.toThrow('503');
+    const success = vi.fn().mockResolvedValue({ ok: true, status: 204 });
+    globalThis.fetch = success;
+    await sdk.revokeSourceSession();
+    expect(JSON.parse(success.mock.calls[0][1].body)).toEqual({ session_token: 'alice-handle', reason: 'ACCOUNT_SWITCH' });
+    await sdk.revokeSourceSession();
+    expect(success).toHaveBeenCalledOnce();
+    globalThis.fetch = mockFetchSuccess();
+    await sdk.identify({ userId: 'Bob' });
+    const runFetch = mockFetchSSE([sseEvent('RunFinished', {})]);
+    globalThis.fetch = runFetch;
+    await collectEvents(sdk.run({ userInput: 'query' }));
+    expect(new Headers(runFetch.mock.calls[0][1].headers).has('X-AgentHub-Source-Session')).toBe(false);
+  });
+
+  it('account switching revokes the old handle before adopting the new user', async () => {
+    const sdk = new WebAASDK();
+    const fetchMock = mockFetchSuccess();
+    await initSDK(sdk, fetchMock);
+    await sdk.identify({ userId: 'Alice', sourceSessionToken: 'alice-handle' });
+    fetchMock.mockClear();
+    await sdk.identify({ userId: 'Bob', sourceSessionToken: 'bob-handle' });
+    expect(fetchMock.mock.calls[0][0]).toContain('/source-session/revoke');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ session_token: 'alice-handle', reason: 'ACCOUNT_SWITCH' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).user_id).toBe('Bob');
+    const runFetch = mockFetchSSE([sseEvent('RunFinished', {})]);
+    globalThis.fetch = runFetch;
+    await collectEvents(sdk.run({ userInput: 'query' }));
+    expect(new Headers(runFetch.mock.calls[0][1].headers).get('X-AgentHub-Source-Session')).toBe('bob-handle');
+  });
+});
+
 function collectEvents(emitter: ReturnType<WebAASDK['run']>, timeout = 500): Promise<AGUIEvent[]> {
   return new Promise((resolve) => {
     const events: AGUIEvent[] = [];
