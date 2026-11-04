@@ -4,6 +4,29 @@
 export const SDK_VERSION = '1.0.0';
 export const DEFAULT_PROTOCOL_VERSION = '1.0.0';
 
+/** Server-owned progress projection; never a client-side resume authority. */
+export interface TaskProgressSnapshot {
+  phase: 'task_progress';
+  run_id: string;
+  todo: {
+    schema_version: 2;
+    plan_revision: number;
+    observation_revision: number;
+    total: number;
+    tasks: Array<{
+      id: string;
+      title: string;
+      status: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'dropped';
+      depends_on: string[];
+    }>;
+    delivery: {
+      status: 'pending' | 'delivered';
+      business_outcome: 'unresolved' | 'blocked' | 'partial' | 'completed';
+      unresolved_task_ids?: string[];
+    };
+  };
+}
+
 // ── Public API Types ──
 
 /** Lightweight event emitter interface exposed in public API */
