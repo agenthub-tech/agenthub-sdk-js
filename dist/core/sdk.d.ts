@@ -6,9 +6,6 @@ export declare class WebAASDK {
     private _runId;
     private _threadId;
     private _userId;
-    private _userAccount;
-    private _sourceSessionToken;
-    private _pendingSourceRevocations;
     private _skills;
     private _localSkills;
     private _apiBase;
@@ -83,10 +80,6 @@ export declare class WebAASDK {
      */
     reset(): void;
     onReset(callback: () => void): void;
-    /** Verify a fresh business-backend proof and bind this SDK to its login session. */
-    authenticateSource(identityAssertion: string, integrationId?: string): Promise<void>;
-    /** Call from business logout/account-switch handling; await acknowledgment. */
-    revokeSourceSession(reason?: 'LOGOUT' | 'ACCOUNT_SWITCH' | 'SESSION_REVOKED'): Promise<void>;
     private _registerBuiltinSkillHandlers;
     private _defaultDialogHandler;
     private _cacheSkillResult;

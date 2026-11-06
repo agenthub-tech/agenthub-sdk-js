@@ -48,9 +48,6 @@ export class WebAASDK {
   private _runId: string | null = null;
   private _threadId: string | null = null;
   private _userId: string | null = null;
-  private _userAccount: string | null = null;
-  private _sourceSessionToken: string | null = null;
-  private _pendingSourceRevocations = new Map<string, string>();
   private _skills: Map<string, SkillDefinition> = new Map();
   private _localSkills: Map<string, (params: Record<string, unknown>) => Promise<Record<string, unknown>>> = new Map();
   private _apiBase: string = '';
@@ -397,7 +394,7 @@ export class WebAASDK {
         }
         response = await fetch(`${this._apiBase}/api/agent/run`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${this._accessToken}`, ...(this._sourceSessionToken ? { 'X-AgentHub-Source-Session': this._sourceSessionToken } : {}) },
+          headers: { 'Authorization': `Bearer ${this._accessToken}` },
           body: formData,
         });
       } else {
@@ -406,7 +403,6 @@ export class WebAASDK {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${this._accessToken}`,
-            ...(this._sourceSessionToken ? { 'X-AgentHub-Source-Session': this._sourceSessionToken } : {}),
           },
           body: JSON.stringify(body),
         });
@@ -670,19 +666,7 @@ export class WebAASDK {
    * Identify the current end user.
    */
   async identify(user: UserIdentity): Promise<void> {
-    if (!this._sourceSessionToken && this._pendingSourceRevocations.size) await this.revokeSourceSession();
-    if (this._sourceSessionToken && (this._userId !== user.userId ||
-      (user.account !== undefined && this._userAccount !== user.account) ||
-      (user.sourceSessionToken && user.sourceSessionToken !== this._sourceSessionToken))) {
-      this.disconnect();
-      this._runId = null;
-      this._threadId = null;
-      await this.revokeSourceSession('ACCOUNT_SWITCH');
-      this._disconnected = false;
-    }
-    this._userAccount = user.account ?? (this._userId === user.userId ? this._userAccount : null);
     this._userId = user.userId;
-    if (user.sourceSessionToken) this._sourceSessionToken = user.sourceSessionToken;
     this._disconnected = false;
     if (!this._accessToken) return;
 
@@ -824,9 +808,7 @@ export class WebAASDK {
   reset(): void {
     this._log('reset');
     this.disconnect();
-    void this.revokeSourceSession('LOGOUT').catch(() => console.warn('来源会话撤销未确认；业务后端应重试退出通知'));
     this._userId = null;
-    this._userAccount = null;
     this._runId = null;
     this._threadId = null;
     this._disconnected = false;
@@ -838,40 +820,6 @@ export class WebAASDK {
 
   onReset(callback: () => void): void {
     this._onResetCallbacks.push(callback);
-  }
-
-  /** Verify a fresh business-backend proof and bind this SDK to its login session. */
-  async authenticateSource(identityAssertion: string, integrationId?: string): Promise<void> {
-    const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/mcp/source-session`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identity_assertion: identityAssertion, integration_id: integrationId }),
-    });
-    if (!response.ok) throw new Error(`来源身份认证失败 (${response.status})`);
-    const session = await response.json();
-    if (typeof session.session_token !== 'string' || typeof session.source_subject !== 'string') throw new Error('来源身份响应无效');
-    await this.identify({ userId: session.source_subject, sourceSessionToken: session.session_token });
-  }
-
-  /** Call from business logout/account-switch handling; await acknowledgment. */
-  async revokeSourceSession(reason: 'LOGOUT' | 'ACCOUNT_SWITCH' | 'SESSION_REVOKED' = 'LOGOUT'): Promise<void> {
-    const token = this._sourceSessionToken;
-    this._sourceSessionToken = null;
-    if (token) {
-      this.disconnect();
-      this._runId = null;
-      this._threadId = null;
-      this._pendingSourceRevocations.set(token, reason);
-    }
-    // A failed logout remains retryable in memory, but its handle is never used
-    // for another Agent request. Business backends must persist logout delivery.
-    for (const [pendingToken, pendingReason] of this._pendingSourceRevocations) {
-      const response = await this._fetchWithAuthRetry(`${this._apiBase}/api/sdk/mcp/source-session/revoke`, {
-        method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_token: pendingToken, reason: pendingReason }),
-      });
-      if (!response.ok) throw new Error(`来源会话撤销未确认 (${response.status})`);
-      this._pendingSourceRevocations.delete(pendingToken);
-    }
   }
 
   // ── Built-in Skill Handlers ─────────────────────────────────────────────────

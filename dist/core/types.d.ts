@@ -61,8 +61,6 @@ export interface UserIdentity {
     userId: string;
     /** Domain account (AD sAMAccountName), independent of userId. */
     account?: string;
-    /** Opaque AgentHub source-session handle, obtained using a business-backend signed assertion. Kept in memory only. */
-    sourceSessionToken?: string;
     name?: string;
     avatar?: string;
     metadata?: Record<string, unknown>;
